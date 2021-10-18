@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/danielgtaylor/openapi-cli-generator/shorthand"
+	"github.com/danielgtaylor/shorthand"
 	toml "github.com/pelletier/go-toml"
 	"github.com/spf13/cobra"
-	yaml "gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v3"
 )
 
 func main() {

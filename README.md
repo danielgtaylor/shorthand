@@ -1,6 +1,6 @@
 # CLI Shorthand Syntax
 
-Generated OpenAPI CLIs come with an optional contextual shorthand syntax for passing structured data into calls that require a body (i.e. `POST`, `PUT`, `PATCH`). While you can always pass full JSON or other documents through `stdin`, you can also specify or modify them by hand as arguments to the command using this shorthand syntax. For example:
+CLI shorthand syntax is a contextual shorthand syntax for passing structured data into commands that require e.g. JSON/YAML. While you can always pass full JSON or other documents through `stdin`, you can also specify or modify them by hand as arguments to the command using this shorthand syntax. For example:
 
 ```sh
 $ my-cli do-something foo.bar[0].baz: 1, .hello: world
@@ -34,7 +34,7 @@ The shorthand syntax supports the following features, described in more detail w
 
 ## Alternatives & Inspiration
 
-The built-in CLI shorthand syntax is not the only one you can use to generate data for CLI commands. Here are some alternatives:
+The CLI shorthand syntax is not the only one you can use to generate data for CLI commands. Here are some alternatives:
 
 - [jo](https://github.com/jpmens/jo)
 - [jarg](https://github.com/jdp/jarg)
@@ -45,7 +45,7 @@ For example, the shorthand example given above could be rewritten as:
 $ jo -p foo=$(jo -p bar=$(jo -a $(jo baz=1 hello=world))) | my-cli do-something
 ```
 
-The built-in shorthand syntax implementation described herein uses those and the following for inspiration:
+The shorthand syntax implementation described herein uses those and the following for inspiration:
 
 - [YAML](http://yaml.org/)
 - [W3C HTML JSON Forms](https://www.w3.org/TR/html-json-forms/)
@@ -56,14 +56,14 @@ It seems reasonable to ask, why create a new syntax?
 
 1. Built-in. No extra executables required. Your CLI ships ready-to-go.
 2. No need to use sub-shells to build complex structured data.
-3. Syntax is closer to YAML & JSON and mimics how we do queries using tools like `jq` and `jmespath`.
+3. Syntax is closer to YAML & JSON and mimics how you do queries using tools like `jq` and `jmespath`.
 
 ## Features in Depth
 
 You can use the included `j` executable to try out the shorthand format examples below. Examples are shown in JSON, but the shorthand parses into structured data that can be marshalled as other formats, like YAML or TOML if you prefer.
 
 ```sh
-go get -u github.com/danielgtaylor/openapi-cli-generator/j
+go get -u github.com/danielgtaylor/shorthand/cmd/j
 ```
 
 Also feel free to use this tool to generate structured data for input to other commands.
@@ -82,7 +82,7 @@ $ j hello: world, question: how are you?
 
 ### Types and Type Coercion
 
-Well-known values like `null`, `true`, and `false` get converted to their respective types automatically. Numbers also get converted. Similar to YAML, anything that doesn't fit one of those is treated as a string. If needed, you can disable this automatic coercion by forcing a value to be treated as a string with the `~` operator. **Note**: the `~` modifier must come *directly after* the colon.
+Well-known values like `null`, `true`, and `false` get converted to their respective types automatically. Numbers also get converted. Similar to YAML, anything that doesn't fit one of those is treated as a string. If needed, you can disable this automatic coercion by forcing a value to be treated as a string with the `~` operator. **Note**: the `~` modifier must come _directly after_ the colon.
 
 ```sh
 # With coercion
@@ -294,10 +294,10 @@ The `shorthand.peg` file implements the parser while the `shorthand.go` file imp
 $ go get -u github.com/mna/pigeon
 
 # Make your shorthand.peg edits. Then:
-$ go generate ./shorthand
+$ go generate
 
 # Next, rebuild the j executable.
-$ go install ./j
+$ go install ./cmd/j
 
 # Now, try it out!
 $ j <your-new-thing>
