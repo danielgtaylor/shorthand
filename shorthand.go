@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:generate pigeon -o generated.go shorthand.peg
@@ -61,6 +64,59 @@ type Key struct {
 type KeyPart struct {
 	Key   string
 	Index []int
+}
+
+// DeepAssign recursively merges a source map into the target.
+func DeepAssign(target, source map[string]interface{}) {
+	for k, v := range source {
+		if vm, ok := v.(map[string]interface{}); ok {
+			if _, ok := target[k]; ok {
+				if tkm, ok := target[k].(map[string]interface{}); ok {
+					DeepAssign(tkm, vm)
+				} else {
+					target[k] = vm
+				}
+			} else {
+				target[k] = vm
+			}
+		} else {
+			target[k] = v
+		}
+	}
+}
+
+// GetInput loads data from stdin (if present) and from the passed arguments,
+// returning the final structure.
+func GetInput(args []string) (map[string]interface{}, error) {
+	var stdin map[string]interface{}
+
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		d, err := ioutil.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := yaml.Unmarshal(d, &stdin); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(args) == 0 {
+		return stdin, nil
+	}
+
+	parsed, err := ParseAndBuild("args", strings.Join(args, " "))
+	if err != nil {
+		return nil, err
+	}
+
+	if (stdin) != nil {
+		DeepAssign(stdin, parsed)
+		return stdin, nil
+	}
+
+	return parsed, nil
 }
 
 // ParseAndBuild takes a string and returns the structured data it represents.

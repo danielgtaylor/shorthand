@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/danielgtaylor/shorthand"
 	toml "github.com/pelletier/go-toml"
@@ -21,7 +20,7 @@ func main() {
 		Example: fmt.Sprintf("%s foo.bar: 1, .baz: true", os.Args[0]),
 		Args:    cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			result, err := shorthand.ParseAndBuild("stdin", strings.Join(args, " "))
+			result, err := shorthand.GetInput(args)
 			if err != nil {
 				panic(err)
 			}
