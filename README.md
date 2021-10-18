@@ -1,385 +1,304 @@
-# OpenAPI CLI Generator
+# CLI Shorthand Syntax
 
-[![GoDoc](https://godoc.org/github.com/danielgtaylor/openapi-cli-generator?status.svg)](https://godoc.org/github.com/danielgtaylor/openapi-cli-generator)
-[![Build Status](https://travis-ci.org/danielgtaylor/openapi-cli-generator.svg?branch=master)](https://travis-ci.org/danielgtaylor/openapi-cli-generator)
-[![Go Report Card](https://goreportcard.com/badge/github.com/danielgtaylor/openapi-cli-generator)](https://goreportcard.com/report/github.com/danielgtaylor/openapi-cli-generator)
-[![Platforms](https://img.shields.io/badge/platform-win%20%7C%20mac%20%7C%20linux-ligh.svg)](https://github.com/danielgtaylor/openapi-cli-generator/releases)
-
-<img alt="openapi-to-cli" src="https://user-images.githubusercontent.com/106826/46594546-a8bb2480-ca88-11e8-90ec-fb87e51009a8.png">
-
----
-
-**Note: this project has been superceded by Restish, an advanced auto-configured OpenAPI CLI that just works:**
-
-- https://rest.sh/
-- https://github.com/danielgtaylor/restish
-
----
-
-This project can be used to generate CLIs from OpenAPI 3 specs. The generated CLIs have the following features:
-
-- Authentication support for API keys and [Auth0](https://auth0.com/).
-- Commands, subcommands, & flag parsing through [Cobra](https://github.com/spf13/cobra)
-- Configuration through [Viper](https://github.com/spf13/viper)
-  - JSON, YAML, or TOML config files in `/etc/` and `$HOME`, e.g. `{"verbose": true}` in `~/.my-app/config.json`
-  - From environment: `APP_NAME_VERBOSE=1`
-  - From flags: `--verbose`
-- HTTP middleware through [Gentleman](https://github.com/h2non/gentleman/)
-- Command middleware with custom parameters (see customization below)
-- Input through `stdin` or [CLI shorthand](https://github.com/danielgtaylor/openapi-cli-generator/tree/master/shorthand)
-- Built-in cache to save data between runs
-- Fast structured logging via [zerolog](https://github.com/rs/zerolog)
-- Pretty output colored by [Chroma](https://github.com/alecthomas/chroma)
-- Response filtering & projection by [JMESPath](http://jmespath.org/) plus [enhancements](https://github.com/danielgtaylor/go-jmespath-plus#enhancements)
-
-## Getting Started
-
-First, make sure you have Go installed. Then, you can grab this project:
+Generated OpenAPI CLIs come with an optional contextual shorthand syntax for passing structured data into calls that require a body (i.e. `POST`, `PUT`, `PATCH`). While you can always pass full JSON or other documents through `stdin`, you can also specify or modify them by hand as arguments to the command using this shorthand syntax. For example:
 
 ```sh
-$ go get -u github.com/danielgtaylor/openapi-cli-generator
+$ my-cli do-something foo.bar[0].baz: 1, .hello: world
 ```
 
-Next, make your project directory and generate the commands file.
-
-```sh
-# Set up your new project
-$ mkdir my-cli && cd my-cli
-
-# Create the default main file. The app name is used for config and env settings.
-$ openapi-cli-generator init <app-name>
-
-# Generate the commands
-$ openapi-cli-generator generate openapi.yaml
-```
-
-Last, add a line like the following to your `main.go` file:
-
-```go
-openapiRegister(false)
-```
-
-If you would like to generate a client for many APIs and have each available under their own namespace, pass `true` instead. Next, build your client:
-
-```sh
-# Build & install the generated client.
-$ go install
-
-# Test it out!
-$ my-cli --help
-```
-
-## OpenAPI Extensions
-
-Several extensions properties may be used to change the behavior of the CLI.
-
-| Name                | Description                                                        |
-| ------------------- | ------------------------------------------------------------------ |
-| `x-cli-aliases`     | Sets up command aliases for operations.                            |
-| `x-cli-description` | Provide an alternate description for the CLI.                      |
-| `x-cli-ignore`      | Ignore this path, operation, or parameter.                         |
-| `x-cli-hidden`      | Hide this path, or operation.                                      |
-| `x-cli-name`        | Provide an alternate name for the CLI.                             |
-| `x-cli-waiters`     | Generate commands/params to wait until a certain state is reached. |
-
-### Aliases
-
-The following example shows how you would set up a command that can be invoked by either `list-items` or simply `ls`:
-
-```yaml
-paths:
-  /items:
-    get:
-      operationId: ListItems
-      x-cli-aliases:
-        - ls
-```
-
-### Description
-
-You can override the default description easily:
-
-```yaml
-paths:
-  /items:
-    description: Some info talking about HTTP headers.
-    x-cli-description: Some info talking about command line arguments.
-```
-
-### Exclusion
-
-It is possible to exclude paths, operations, and/or parameters from the generated CLI. No code will be generated as they will be completely skipped.
-
-```yaml
-paths:
-  /included:
-    description: I will get included in the CLI.
-  /excluded:
-    x-cli-ignore: true
-    description: I will not be in the CLI :-(
-```
-
-Alternatively, you can have the path or operation exist in the UI but be hidden from the standard help list. Specific help is still available via `my-cli my-hidden-operation --help`:
-
-```yaml
-paths:
-  /hidden:
-    x-cli-hidden: true
-```
-
-### Name
-
-You can override the default name for the API, operations, and params:
-
-```yaml
-info:
-  x-cli-name: foo
-paths:
-  /items:
-    operationId: myOperation
-    x-cli-name: my-op
-    parameters:
-      - name: id
-        x-cli-name: item-id
-        in: query
-```
-
-With the above, you would be able to call `my-cli my-op --item-id=12`.
-
-### Waiters
-
-Waiters allow you to declaratively define special commands and parameters that will cause a command to block and wait until a particular condition has been met. This is particularly useful for asyncronous operations. For example, you might submit an order and then wait for that order to have been charged successfully before continuing on.
-
-At a high level, waiters consist of an operation and a set of matchers that select a value and compare it to an expectation. For the example above, you might call the `GetOrder` operation every 30 seconds until the response's JSON `status` field is equal to `charged`. Here is what that would look like in your OpenAPI YAML file:
-
-```yaml
-info:
-  title: Orders API
-paths:
-  /order/{id}:
-    get:
-      operationId: GetOrder
-      description: Get an order's details.
-      parameters:
-        - name: id
-          in: path
-      responses:
-        200:
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum: ['placed', 'charged', 'shipped', 'returned']
-x-cli-waiters:
-  order-charged:
-    delay: 30
-    attempts: 10
-    operationId: GetOrder
-    matchers:
-      - select: response.body#status
-        expected: charged
-```
-
-The generated CLI will work like this: `my-cli wait order-charged $ID` where `$ID` corresponds to the `GetOrder` operation's `id` parameter. It will try to get and match the status 10 times, with a pause of 30 seconds between tries. If it matches, it will exit with a zero status code. If it fails, it will exit with a non-zero exit code and log a message.
-
-This is a great start, but we can make this a little bit friendlier to use. Take a look at this modified waiter configuration:
-
-```yaml
-x-cli-waiters:
-  order-charged:
-    short: Short description for CLI `--help`
-    long: Long description for CLI `--help`
-    delay: 30
-    attempts: 10
-    operationId: GetOrder
-    matchers:
-      - select: response.body#status
-        expected: charged
-      - select: response.status
-        expected: 404
-        state: failure
-    after:
-      CreateOrder:
-        id: response.body#order_id
-```
-
-Here we added two new features:
-
-1. A short-circuit to fail fast. If we type an invalid order ID then we want the command to exit immediately with a non-zero exit code.
-
-2. The `after` block allows us to add a parameter to an _existing_ operation to invoke the waiter. This block says that after a call to `CreateOrder` with a `--wait-order-charged` param, it should call the waiter's `GetOrder` operation with the `id` param set to the result of the `response.body#order_id` selector.
-
-You can now create and wait on an order via `my-cli create-order <order.json --wait-order-charged`.
-
-#### Matchers
-
-The following matcher fields are available:
-
-| Field      | Description                                                                                     | Example           |
-| ---------- | ----------------------------------------------------------------------------------------------- | ----------------- |
-| `select`   | The value selection criteria. See the selector table below.                                     | `response.status` |
-| `test`     | The test to perform. Defaults to `equal` but can be set to `any` and `all` to match list items. | `equal`           |
-| `expected` | The expected value                                                                              | `charged`         |
-| `state`    | The state to set. Defaults to `success` but can be set to `failure`.                            | `success`         |
-
-The following selectors are available:
-
-| Selector          | Description               | Argument       | Example                         |
-| ----------------- | ------------------------- | -------------- | ------------------------------- |
-| `request.param`   | Request parameter         | Parameter name | `request.param#id`              |
-| `request.body`    | Request body query        | JMESPath query | `request.body#order.id`         |
-| `response.status` | Response HTTP status code | -              | `response.status`               |
-| `response.header` | Response HTTP header      | Header name    | `response.header#content-type`  |
-| `response.body`   | Response body query       | JMESPath query | `response.body#orders[].status` |
-
-## Customization
-
-Your `main.go` is the entrypoint to your generated CLI, and may be customized to add additional logic and features. For example, you might set custom headers or handle auth before a request goes out on the wire. The `apikey` module provides a sample implementation.
-
-### Configuration Description
-
-TODO: Show table describing all well-known configuration keys.
-
-### Custom Global Flags
-
-It's possible to supply custom flags and a pre-run function. For example, say your OpenAPI spec has two servers: production and testing. You could add a `--test` flag to select the second server.
-
-```go
-func main() {
-	// ... init code ...
-
-	// Add a `--test` flag to enable hitting testing.
-	cli.AddGlobalFlag("test", "", "Use test endpoint", false)
-
-	cli.PreRun = func(cmd *cobra.Command, args []string) error {
-		if viper.GetBool("test") {
-			// Use the test server
-			viper.Set("server-index", 1)
-		}
-}
-```
-
-### HTTP Middleware
-
-[Gentleman](https://github.com/h2non/gentleman/) provides support for HTTP request and response middleware. Don't forget to call `h.Next(ctx)` in your handler! For example:
-
-```go
-// Register a request middleware handler to print the path.
-cli.Client.UseRequest(func(ctx *context.Context, h context.Handler) {
-	fmt.Printf("Request path: %s\n", ctx.Request.URL.Path)
-	h.Next(ctx)
-})
-
-// Register a response middleware handler to print the status code.
-cli.Client.UseResponse(func(ctx *context.Context, h context.Handler) {
-	fmt.Printf("Response status: %d\n", ctx.Response.StatusCode)
-	h.Next(ctx)
-})
-```
-
-### Custom Command Flags & Middleware
-
-While the above HTTP middleware is great for adding headers or logging various things, there are times when you need to modify the behavior of a generated command. You can do so by registering custom command flags and using command middleware.
-
-Flags and middleware are applied to a _command path_, which is a space-separated list of commands in a hierarchy. For example, if you have a command `foo` which has a subcommand `bar`, then the command path to reference `bar` for flags and middleware would be `foo bar`.
-
-Note that any calls to `cli.AddFlag` must be made **before** calling the generated command registration function (e.g. `openapiRegister(...)`) or the flags will not get created properly.
-
-Here's an example showing how a custom flag can change the command response:
-
-```go
-// Register a new custom flag for the `foo` command.
-cli.AddFlag("foo", "custom", "", "description", "")
-
-cli.RegisterAfter("foo", func(cmd *cobra.Command, params *viper.Viper, resp *gentleman.Response, data interface{}) interface{} {
-  m := data.(map[string]interface{})
-  m["custom"] = params.GetString("custom")
-  return m
-})
-
-// Register our generated commands with the CLI after the above.
-openapiRegister(false)
-```
-
-If the `foo` command would normally return a JSON object like `{"hello": "world"}` it would now return the following if called with `--custom=test`:
+Would result in the following body contents being sent on the wire (assuming a JSON media type is specified in the OpenAPI spec):
 
 ```json
 {
-  "custom": "test",
-  "hello": "world"
+  "foo": {
+    "bar": [
+      {
+        "baz": 1,
+        "hello": "world"
+      }
+    ]
+  }
 }
 ```
 
-### Authentication & Authorization
+The shorthand syntax supports the following features, described in more detail with examples below:
 
-See the `apikey` module for a simple example of a pre-shared key.
+- Automatic type coercion & forced strings
+- Nested object creation
+- Object property grouping
+- Nested array creation
+- Appending to arrays
+- Both object and array backreferences
+- Loading property values from files
+  - Supports structured, forced string, and base64 data
 
-If instead you use a third party auth system that vends tokens and want your users to be able to log in and use the API, here's an example using Auth0:
+## Alternatives & Inspiration
 
-```go
-func main() {
-	cli.Init(&cli.Config{
-		AppName:   "example",
-		EnvPrefix: "EXAMPLE",
-		Version:   "1.0.0",
-	})
+The built-in CLI shorthand syntax is not the only one you can use to generate data for CLI commands. Here are some alternatives:
 
-  // Auth0 requires a client ID, issuer base URL, and audience fields when
-  // requesting a token. We set these up here and use the Authorization Code
-  // with PKCE flow to log in, which opens a browser for the user to log into.
-  clientID := "abc123"
-  issuer := "https://mycompany.auth0.com/"
+- [jo](https://github.com/jpmens/jo)
+- [jarg](https://github.com/jdp/jarg)
 
-  cli.UseAuth("user", &oauth.AuthCodeHandler{
-    ClientID: "clientID",
-    AuthorizeURL: issuer+"authorize",
-    TokenURL: issuer+"oauth/token",
-    Keys: []string{"audience"},
-    Params: []string{"audience"},
-    Scopes: []string{"offline_access"},
-  })
-
-  // TODO: Register API commands here
-  // ...
-
-	cli.Root.Execute()
-}
-```
-
-Note that there is a convenience module when using Auth0 specifically, allowing you to do this:
-
-```go
-auth0.InitAuthCode(clientID, issuer,
-  auth0.Type("user"),
-  auth0.Scopes("offline_access"))
-```
-
-The expanded example above is more useful when integrating with other services since it uses basic OAuth 2 primitives.
-
-## Development
-
-### Working with Templates
-
-The code generator is configured to bundle all necessary assets into the final executable by default. If you wish to modify the templates, you can use the `go-bindata` tool to help:
+For example, the shorthand example given above could be rewritten as:
 
 ```sh
-# One-time setup of the go-bindata tool:
-$ go get -u github.com/shuLhan/go-bindata/...
-
-# Set up development mode (load data from actual files in ./templates/)
-$ go-bindata -debug ./templates/...
-
-# Now, do all your edits to the templates. You can test with:
-$ go run *.go generate my-api.yaml
-
-# Build the final static embedded files and code generator executable.
-$ go generate
-$ go install
+$ jo -p foo=$(jo -p bar=$(jo -a $(jo baz=1 hello=world))) | my-cli do-something
 ```
 
-## License
+The built-in shorthand syntax implementation described herein uses those and the following for inspiration:
 
-https://dgt.mit-license.org/
+- [YAML](http://yaml.org/)
+- [W3C HTML JSON Forms](https://www.w3.org/TR/html-json-forms/)
+- [jq](https://stedolan.github.io/jq/)
+- [JMESPath](http://jmespath.org/)
+
+It seems reasonable to ask, why create a new syntax?
+
+1. Built-in. No extra executables required. Your CLI ships ready-to-go.
+2. No need to use sub-shells to build complex structured data.
+3. Syntax is closer to YAML & JSON and mimics how we do queries using tools like `jq` and `jmespath`.
+
+## Features in Depth
+
+You can use the included `j` executable to try out the shorthand format examples below. Examples are shown in JSON, but the shorthand parses into structured data that can be marshalled as other formats, like YAML or TOML if you prefer.
+
+```sh
+go get -u github.com/danielgtaylor/openapi-cli-generator/j
+```
+
+Also feel free to use this tool to generate structured data for input to other commands.
+
+### Keys & Values
+
+At its most basic, a structure is built out of key & value pairs. They are separated by commas:
+
+```sh
+$ j hello: world, question: how are you?
+{
+  "hello": "world",
+  "question": "how are you?"
+}
+```
+
+### Types and Type Coercion
+
+Well-known values like `null`, `true`, and `false` get converted to their respective types automatically. Numbers also get converted. Similar to YAML, anything that doesn't fit one of those is treated as a string. If needed, you can disable this automatic coercion by forcing a value to be treated as a string with the `~` operator. **Note**: the `~` modifier must come *directly after* the colon.
+
+```sh
+# With coercion
+$ j empty: null, bool: true, num: 1.5, string: hello
+{
+  "bool": true,
+  "empty": null,
+  "num": 1.5,
+  "string": "hello"
+}
+
+# As strings
+$ j empty:~ null, bool:~ true, num:~ 1.5, string:~ hello
+{
+  "bool": "true",
+  "empty": "null",
+  "num": "1.5",
+  "string": "hello"
+}
+
+# Passing the empty string
+$ j blank:~
+{
+  "blank": ""
+}
+
+# Passing a tilde using whitespace
+$ j foo: ~/Documents
+{
+  "foo": "~/Documents"
+}
+
+# Passing a tilde using forced strings
+$ j foo:~~/Documents
+{
+  "foo": "~/Documents"
+}
+```
+
+### Objects
+
+Nested objects use a `.` separator when specifying the key.
+
+```sh
+$ j foo.bar.baz: 1
+{
+  "foo": {
+    "bar": {
+      "baz": 1
+    }
+  }
+}
+```
+
+Properties of nested objects can be grouped by placing them inside `{` and `}`.
+
+```sh
+$ j foo.bar{id: 1, count.clicks: 5}
+{
+  "foo": {
+    "bar": {
+      "count": {
+        "clicks": 5
+      },
+      "id": 1
+    }
+  }
+}
+```
+
+### Arrays
+
+Simple arrays use a `,` between values. Nested arrays use square brackets `[` and `]` to specify the zero-based index to insert an item. Use a blank index to append to the array.
+
+```sh
+# Array shorthand
+$ j a: 1, 2, 3
+{
+  "a": [
+    1,
+    2,
+    3
+  ]
+}
+
+# Nested arrays
+$ j a[0][2][0]: 1
+{
+  "a": [
+    [
+      null,
+      null,
+      [
+        1
+      ]
+    ]
+  ]
+}
+
+# Appending arrays
+$ j a[]: 1, a[]: 2, a[]: 3
+{
+  "a": [
+    1,
+    2,
+    3
+  ]
+}
+```
+
+### Backreferences
+
+Since the shorthand syntax is context-aware, it is possible to use the current context to reference back to the most recently used object or array when creating new properties or items.
+
+```sh
+# Backref with object properties
+$ j foo.bar: 1, .baz: 2
+{
+  "foo": {
+    "bar": 1,
+    "baz": 2
+  }
+}
+
+# Backref with array appending
+$ j foo.bar[]: 1, []: 2, []: 3
+{
+  "foo": {
+    "bar": [
+      1,
+      2,
+      3
+    ]
+  }
+}
+
+# Easily build complex structures
+$ j name: foo, tags[]{id: 1, count.clicks: 5, .sales: 1}, []{id: 2, count.clicks: 8, .sales: 2}
+{
+  "name": "foo",
+  "tags": [
+    {
+      "count": {
+        "clicks": 5,
+        "sales": 1
+      },
+      "id": 1
+    },
+    {
+      "count": {
+        "clicks": 8,
+        "sales": 2
+      },
+      "id": 2
+    }
+  ]
+}
+```
+
+### Loading from Files
+
+Sometimes a field makes more sense to load from a file than to be specified on the commandline. The `@` preprocessor and `~` & `%` modifiers let you load structured data, strings, and base64-encoded data into values.
+
+```sh
+# Load a file's value as a parameter
+$ j foo: @hello.txt
+{
+  "foo": "hello, world"
+}
+
+# Load structured data
+$ j foo: @hello.json
+{
+  "foo": {
+    "hello": "world"
+  }
+}
+
+# Force loading a string
+$ j foo: @~hello.json
+{
+  "foo": "{\n  \"hello\": \"world\"\n}"
+}
+
+# Load as base 64 data
+$ j foo: @%hello.json
+{
+  "foo": "ewogICJoZWxsbyI6ICJ3b3JsZCIKfQ=="
+}
+```
+
+Remember, it's possible to disable this behavior with the string modifier `~`:
+
+```sh
+$ j twitter:~ @user
+{
+  "twitter": "@user"
+}
+```
+
+## Implementation
+
+The shorthand syntax is implemented as a [PEG](https://en.wikipedia.org/wiki/Parsing_expression_grammar) grammar which creates an AST-like object that is used to build an in-memory structure that can then be serialized out into formats like JSON, YAML, TOML, etc.
+
+The `shorthand.peg` file implements the parser while the `shorthand.go` file implements the builder. Here's how you can test local changes to the grammar:
+
+```sh
+# One-time setup: install PEG compiler
+$ go get -u github.com/mna/pigeon
+
+# Make your shorthand.peg edits. Then:
+$ go generate ./shorthand
+
+# Next, rebuild the j executable.
+$ go install ./j
+
+# Now, try it out!
+$ j <your-new-thing>
+```
