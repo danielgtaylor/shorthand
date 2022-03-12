@@ -37,6 +37,8 @@ func main() {
 				if err == nil {
 					marshalled = []byte(t.String())
 				}
+			case "shorthand":
+				marshalled = []byte(shorthand.Get(result))
 			}
 
 			if err != nil {
@@ -47,7 +49,7 @@ func main() {
 		},
 	}
 
-	format = cmd.Flags().StringP("format", "f", "json", "Output format [json, yaml, toml]")
+	format = cmd.Flags().StringP("format", "f", "json", "Output format [json, yaml, toml, shorthand]")
 
 	cmd.Execute()
 }

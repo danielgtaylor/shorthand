@@ -46,12 +46,12 @@ KeyValue ← k:Key v:((':' Modifier? _ Value (',' _ ArrayValue &([^:] / !.))*) /
 
     extra := toIfaceSlice(vSl[4])
     if len(extra) > 0 {
-      values := &list{value}
+      values := []interface{}{value}
       repeatedWithIndex(extra, 2, func(v interface{}) {
         if modifier == modifierString {
           v = fmt.Sprintf("%v", v)
         }
-        values.Append(v)
+        values = append(values, v)
       })
       value = values
     } else {
