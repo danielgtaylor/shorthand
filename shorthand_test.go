@@ -100,6 +100,11 @@ func TestParserListIndex(t *testing.T) {
 		parsed(`foo[3]: three, foo[5]: five, foo[0]: true`))
 }
 
+func TestParserListIndexNested(t *testing.T) {
+	assert.JSONEq(t, `{"foo": [null, null, null, [null, ["three"], true]]}`,
+		parsed(`foo[3][1][]: three, foo[3][2]: true`))
+}
+
 func TestParserListIndexObject(t *testing.T) {
 	result := parsed(`foo[0].bar: 1, foo[0].baz: 2`)
 	assert.JSONEq(t, `{"foo": [{"bar": 1, "baz": 2}]}`, result)
