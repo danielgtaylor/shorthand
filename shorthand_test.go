@@ -119,6 +119,11 @@ func TestParserListObjects(t *testing.T) {
 	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
 }
 
+func TestParserListInlineObjects(t *testing.T) {
+	result := parsed(`foo[]{id: 1, count: 1}, []{id: 2, count: 2}`)
+	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
+}
+
 func TestParserNonFile(t *testing.T) {
 	assert.JSONEq(t, `{"foo": "@user"}`, parsed(`foo:~ @user`))
 }
