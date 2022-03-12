@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"sort"
@@ -31,17 +33,6 @@ func repeatedWithIndex(v interface{}, index int, cb func(v interface{})) {
 	for _, i := range v.([]interface{}) {
 		cb(i.([]interface{})[index])
 	}
-}
-
-// list can be appended in-place while building structured data.
-type list []interface{}
-
-func (l *list) Append(v interface{}) {
-	*l = append(*l, v)
-}
-
-func (l *list) String() string {
-	return fmt.Sprintf("%v", *l)
 }
 
 // AST contains all of the key-value pairs in the document.
@@ -88,11 +79,15 @@ func DeepAssign(target, source map[string]interface{}) {
 // GetInput loads data from stdin (if present) and from the passed arguments,
 // returning the final structure.
 func GetInput(args []string) (map[string]interface{}, error) {
+	stat, _ := os.Stdin.Stat()
+	return getInput(stat.Mode(), os.Stdin, args)
+}
+
+func getInput(mode fs.FileMode, stdinFile io.Reader, args []string) (map[string]interface{}, error) {
 	var stdin map[string]interface{}
 
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		d, err := ioutil.ReadAll(os.Stdin)
+	if (mode & os.ModeCharDevice) == 0 {
+		d, err := ioutil.ReadAll(stdinFile)
 		if err != nil {
 			return nil, err
 		}
@@ -106,34 +101,86 @@ func GetInput(args []string) (map[string]interface{}, error) {
 		return stdin, nil
 	}
 
-	parsed, err := ParseAndBuild("args", strings.Join(args, " "))
+	parsed, err := ParseAndBuild("args", strings.Join(args, " "), stdin)
 	if err != nil {
 		return nil, err
-	}
-
-	if (stdin) != nil {
-		DeepAssign(stdin, parsed)
-		return stdin, nil
 	}
 
 	return parsed, nil
 }
 
+// sliceRef represents a reference to a slice on a parent object (map or slice)
+// that can be modified and have values set on it.
+type sliceRef struct {
+	Base  interface{}
+	Index int
+	Key   string
+}
+
+func (c *sliceRef) GetList() []interface{} {
+	switch b := c.Base.(type) {
+	case map[string]interface{}:
+		if l, ok := b[c.Key].([]interface{}); ok {
+			return l
+		}
+	case []interface{}:
+		if l, ok := b[c.Index].([]interface{}); ok {
+			return l
+		}
+	}
+	return nil
+}
+
+func (c *sliceRef) Length() int {
+	return len(c.GetList())
+}
+
+func (c *sliceRef) Grow(length int) {
+	l := c.GetList()
+	if l == nil {
+		// This was not a list... might have been another type which we are
+		// now going to overwrite.
+		l = []interface{}{}
+	}
+
+	for len(l) < length+1 {
+		l = append(l, nil)
+	}
+
+	switch b := c.Base.(type) {
+	case map[string]interface{}:
+		b[c.Key] = l
+	case []interface{}:
+		b[c.Index] = l
+	}
+}
+
+func (c *sliceRef) GetValue(index int) interface{} {
+	return c.GetList()[index]
+}
+
+func (c *sliceRef) SetValue(index int, value interface{}) {
+	c.GetList()[index] = value
+}
+
 // ParseAndBuild takes a string and returns the structured data it represents.
-func ParseAndBuild(filename, input string) (map[string]interface{}, error) {
+func ParseAndBuild(filename, input string, existing ...map[string]interface{}) (map[string]interface{}, error) {
 	parsed, err := Parse(filename, []byte(input))
 	if err != nil {
 		return nil, err
 	}
 
-	return Build(parsed.(AST))
+	return Build(parsed.(AST), existing...)
 }
 
 // Build an AST of key-value pairs into structured data.
-func Build(ast AST) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+func Build(ast AST, existing ...map[string]interface{}) (map[string]interface{}, error) {
+	result := map[string]interface{}{}
+	for _, e := range existing {
+		DeepAssign(result, e)
+	}
 	ctx := result
-	var ctxSlice *list
+	var ctxSlice sliceRef
 
 	for _, kv := range ast {
 		k := kv.Key
@@ -195,20 +242,20 @@ func Build(ast AST) (map[string]interface{}, error) {
 			// must be created as either a list or map depending on whether there
 			// are index items for one or more lists.
 			if kp.Key != "" && (ki < len(k.Parts)-1 || len(kp.Index) > 0) {
-				if ctx[kp.Key] == nil {
-					if len(kp.Index) > 0 {
-						ctx[kp.Key] = &list{}
-						ctxSlice = ctx[kp.Key].(*list)
-					} else {
-						ctx[kp.Key] = make(map[string]interface{})
-						ctx = ctx[kp.Key].(map[string]interface{})
+				if len(kp.Index) > 0 {
+					if ctx[kp.Key] == nil {
+						ctx[kp.Key] = []interface{}{}
 					}
+					ctxSlice.Base = ctx
+					ctxSlice.Key = kp.Key
 				} else {
-					if len(kp.Index) > 0 {
-						ctxSlice = ctx[kp.Key].(*list)
-					} else {
-						ctx = ctx[kp.Key].(map[string]interface{})
+					if ctx[kp.Key] == nil {
+						ctx[kp.Key] = make(map[string]interface{})
 					}
+					if _, ok := ctx[kp.Key].(map[string]interface{}); !ok {
+						ctx[kp.Key] = make(map[string]interface{})
+					}
+					ctx = ctx[kp.Key].(map[string]interface{})
 				}
 			}
 
@@ -216,33 +263,34 @@ func Build(ast AST) (map[string]interface{}, error) {
 			// context.
 			for i, index := range kp.Index {
 				if index == -1 {
-					if ctxSlice != nil {
-						index = len(*ctxSlice)
+					if ctxSlice.Base != nil {
+						index = ctxSlice.Length()
 					} else {
 						index = 0
 					}
 				}
 
-				for len(*ctxSlice) < index+1 {
-					// Increase the size of the list to fit the new item if needed.
-					ctxSlice.Append(nil)
-				}
+				ctxSlice.Grow(index)
 
 				if i < len(kp.Index)-1 {
-					// Not the last index item, so create another list!
-					(*ctxSlice)[index] = &list{}
-					ctxSlice = (*ctxSlice)[index].(*list)
+					newBase := ctxSlice.GetList()
+					if len(newBase) < index+1 || newBase[index] == nil {
+						newList := []interface{}{}
+						ctxSlice.SetValue(index, newList)
+					}
+					ctxSlice.Index = index
+					ctxSlice.Base = newBase
 				} else {
 					// This is the last index item. If it is also the last key part, then
 					// set the value. Otherwise, create a map for the next key part to
 					// use and update the context.
 					if ki < len(k.Parts)-1 {
-						if (*ctxSlice)[index] == nil {
-							(*ctxSlice)[index] = make(map[string]interface{})
+						if ctxSlice.GetValue(index) == nil {
+							ctxSlice.SetValue(index, map[string]interface{}{})
 						}
-						ctx = (*ctxSlice)[index].(map[string]interface{})
+						ctx = ctxSlice.GetValue(index).(map[string]interface{})
 					} else {
-						(*ctxSlice)[index] = v
+						ctxSlice.SetValue(index, v)
 					}
 				}
 			}
@@ -251,9 +299,9 @@ func Build(ast AST) (map[string]interface{}, error) {
 			// the value on the current context.
 			if ki == len(k.Parts)-1 && len(kp.Index) == 0 {
 				ctx[kp.Key] = v
-
-				if vSlice, ok := v.(*list); ok {
-					ctxSlice = vSlice
+				if _, ok := v.([]interface{}); ok {
+					ctxSlice.Base = v
+					ctxSlice.Index = ki
 				}
 			}
 		}
@@ -307,10 +355,8 @@ func renderValue(start bool, value interface{}) string {
 			switch item.(type) {
 			case map[string]interface{}:
 				scalars = false
-				break
 			case []interface{}:
 				scalars = false
-				break
 			}
 		}
 

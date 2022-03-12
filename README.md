@@ -1,5 +1,7 @@
 # CLI Shorthand Syntax
 
+[![Docs](https://godoc.org/github.com/danielgtaylor/shorthand?status.svg)](https://pkg.go.dev/github.com/danielgtaylor/shorthand?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/danielgtaylor/shorthand)](https://goreportcard.com/report/github.com/danielgtaylor/shorthand)
+
 CLI shorthand syntax is a contextual shorthand syntax for passing structured data into commands that require e.g. JSON/YAML. While you can always pass full JSON or other documents through `stdin`, you can also specify or modify them by hand as arguments to the command using this shorthand syntax. For example:
 
 ```sh
@@ -281,6 +283,43 @@ $ j twitter:~ @user
 {
   "twitter": "@user"
 }
+```
+
+## Library Usage
+
+The `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments:
+
+```go
+package main
+
+import (
+  "fmt"
+  "github.com/danielgtaylor/shorthand"
+)
+
+func main() {
+  result, err := shorthand.GetInput(os.Args[1:])
+  if err != nil {
+    panic(err)
+  }
+
+  fmt.Println(result)
+}
+```
+
+It's also possible to get the shorthand representation of an input, for example:
+
+```go
+example := map[string]interface{}{
+  "hello": "world",
+  "labels": []interface{}{
+    "one",
+    "two",
+  },
+}
+
+// Prints "hello: world, labels: one, two"
+fmt.Println(shorthand.Get(example))
 ```
 
 ## Implementation

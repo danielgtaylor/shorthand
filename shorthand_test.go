@@ -2,19 +2,43 @@ package shorthand
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func parsed(input string) string {
-	result, err := ParseAndBuild("stdin", input)
+func parsed(input string, existing ...map[string]interface{}) string {
+	result, err := ParseAndBuild("stdin", input, existing...)
 	if err != nil {
 		panic(err)
 	}
 
 	j, _ := json.Marshal(result)
 	return string(j)
+}
+
+func TestGetInput(t *testing.T) {
+	file := strings.NewReader(`{
+		"foo": [1],
+		"bar": {
+			"baz": true
+		},
+		"existing": [1, 2, 3]
+	}`)
+
+	result, err := getInput(0, file, []string{"foo[]: 2, bar.another: false, existing: null, existing[]: 1"})
+	assert.NoError(t, err)
+
+	j, _ := json.Marshal(result)
+	assert.JSONEq(t, `{
+		"foo": [1, 2],
+		"bar": {
+			"another": false,
+			"baz": true
+		},
+		"existing": [1]
+	}`, string(j))
 }
 
 func TestParseCoerce(t *testing.T) {
@@ -67,9 +91,18 @@ func TestParserAppendList(t *testing.T) {
 	assert.JSONEq(t, `{"foo": [1, 2, 3]}`, parsed(`foo[]: 1, []: 2, []: 3`))
 }
 
+func TestParserAppendNestedList(t *testing.T) {
+	assert.JSONEq(t, `{"foo": [[[[2, 3]]]], "bar": [false]}`, parsed(`foo[][]: 1, [0][]: 2, 3, bar[]: true, [0]: false`))
+}
+
 func TestParserListIndex(t *testing.T) {
 	assert.JSONEq(t, `{"foo": [true, null, null, "three", null, "five"]}`,
 		parsed(`foo[3]: three, foo[5]: five, foo[0]: true`))
+}
+
+func TestParserListIndexNested(t *testing.T) {
+	assert.JSONEq(t, `{"foo": [null, null, null, [null, ["three"], true]]}`,
+		parsed(`foo[3][1][]: three, foo[3][2]: true`))
 }
 
 func TestParserListIndexObject(t *testing.T) {
@@ -86,6 +119,11 @@ func TestParserListObjects(t *testing.T) {
 	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
 }
 
+func TestParserListInlineObjects(t *testing.T) {
+	result := parsed(`foo[]{id: 1, count: 1}, []{id: 2, count: 2}`)
+	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
+}
+
 func TestParserNonFile(t *testing.T) {
 	assert.JSONEq(t, `{"foo": "@user"}`, parsed(`foo:~ @user`))
 }
@@ -98,6 +136,21 @@ func TestParserFileStructured(t *testing.T) {
 func TestParserFileForceString(t *testing.T) {
 	result := parsed(`foo: @~testdata/hello.json`)
 	assert.JSONEq(t, `{"foo": "{\n  \"hello\": \"world\"\n}\n"}`, result)
+}
+
+func TestExistingInput(t *testing.T) {
+	result := parsed(`foo[]: 3, foo[]: 4, bar[0][]: 2, baz.another: test`, map[string]interface{}{
+		"foo": []interface{}{1, 2},
+		"bar": []interface{}{[]interface{}{1}},
+		"baz": true,
+	})
+	assert.JSONEq(t, `{
+		"foo": [1, 2, 3, 4],
+		"bar": [[1, 2]],
+		"baz": {
+			"another": "test"
+		}
+	}`, result)
 }
 
 func TestGetShorthandSimple(t *testing.T) {
