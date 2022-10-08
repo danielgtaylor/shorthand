@@ -1,14 +1,40 @@
-# CLI Shorthand Syntax
+# Structured Data Shorthand Syntax
 
 [![Docs](https://godoc.org/github.com/danielgtaylor/shorthand?status.svg)](https://pkg.go.dev/github.com/danielgtaylor/shorthand?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/danielgtaylor/shorthand)](https://goreportcard.com/report/github.com/danielgtaylor/shorthand)
 
-CLI shorthand syntax is a contextual shorthand syntax for passing structured data into commands that require e.g. JSON/YAML. While you can always pass full JSON or other documents through `stdin`, you can also specify or modify them by hand as arguments to the command using this shorthand syntax. For example:
+Shorthand is a superset and friendlier variant of JSON designed with several use-cases in mind:
 
-```sh
-$ my-cli do-something foo.bar[0].baz: 1, .hello: world
+| Use Case             | Example                                          |
+| -------------------- | ------------------------------------------------ |
+| CLI arguments/input  | `my-cli post 'foo.bar[0]{baz: 1, hello: world}'` |
+| Patch operations     | `name: undefined, item.tags[]: appended`         |
+| Query language       | `items[created before "2022-01-01"].{id, tags}`  |
+| Configuration format | `{json.save.autoFormat: true}`                   |
+
+The shorthand syntax supports the following features, described in more detail with examples below:
+
+- Superset of JSON (valid JSON is valid shorthand)
+- Optional commas, quotes, and sometimes colons
+- Automatic type coercion
+  - Support for bytes, dates, and maps with non-string keys
+- Nested object & array creation
+- Loading values from files
+- Editing existing data
+  - Appending & inserting to arrays
+  - Unsetting properties
+  - Moving properties & items
+- Querying, array filtering, and field selection
+
+The following are both completely valid shorthand and result in the same output:
+
 ```
-
-Would result in the following body contents being sent on the wire (assuming a JSON media type is specified in the OpenAPI spec):
+{
+  foo.bar[]{
+    baz: 1
+    hello: world
+  }
+}
+```
 
 ```json
 {
@@ -23,16 +49,7 @@ Would result in the following body contents being sent on the wire (assuming a J
 }
 ```
 
-The shorthand syntax supports the following features, described in more detail with examples below:
-
-- Automatic type coercion & forced strings
-- Nested object creation
-- Object property grouping
-- Nested array creation
-- Appending to arrays
-- Both object and array backreferences
-- Loading property values from files
-  - Supports structured, forced string, and base64 data
+This library has excellent test coverage and is additionally fuzz tested to ensure correctness and prevent panics.
 
 ## Alternatives & Inspiration
 
@@ -44,7 +61,7 @@ The CLI shorthand syntax is not the only one you can use to generate data for CL
 For example, the shorthand example given above could be rewritten as:
 
 ```sh
-$ jo -p foo=$(jo -p bar=$(jo -a $(jo baz=1 hello=world))) | my-cli do-something
+$ jo -p foo=$(jo -p bar=$(jo -a $(jo -p baz=1 hello=world)))
 ```
 
 The shorthand syntax implementation described herein uses those and the following for inspiration:
@@ -56,9 +73,10 @@ The shorthand syntax implementation described herein uses those and the followin
 
 It seems reasonable to ask, why create a new syntax?
 
-1. Built-in. No extra executables required. Your CLI ships ready-to-go.
+1. Built-in. No extra executables required. Your tool ships ready-to-go.
 2. No need to use sub-shells to build complex structured data.
 3. Syntax is closer to YAML & JSON and mimics how you do queries using tools like `jq` and `jmespath`.
+4. It's _optional_, so you can use your favorite tool/language instead, while at the same time it provides a minimum feature set everyone will have in common.
 
 ## Features in Depth
 
@@ -82,9 +100,24 @@ $ j hello: world, question: how are you?
 }
 ```
 
-### Types and Type Coercion
+### Types
 
-Well-known values like `null`, `true`, and `false` get converted to their respective types automatically. Numbers also get converted. Similar to YAML, anything that doesn't fit one of those is treated as a string. If needed, you can disable this automatic coercion by forcing a value to be treated as a string with the `~` operator. **Note**: the `~` modifier must come _directly after_ the colon.
+Shorthand supports the standard JSON types, but adds some of its own as well to better support binary formats and its query features.
+
+| Type      | Description                                                      |
+| --------- | ---------------------------------------------------------------- |
+| `null`    | JSON `null`                                                      |
+| `boolean` | Either `true` or `false`                                         |
+| `number`  | JSON number, e.g. `1`, `2.5`, or `1.4e5`                         |
+| `string`  | Quoted or unquoted strings, e.g. `"hello"`                       |
+| `bytes`   | `%`-prefixed, unquoted, base64-encoded binary data, e.g. `%wg==` |
+| `time`    | Date/time in ISO8601, e.g. `2022-01-01T12:00:00Z`                |
+| `array`   | JSON array, e.g. `[1, 2, 3]`                                     |
+| `object`  | JSON object, e.g. `{"hello": "world"}`                           |
+
+### Type Coercion
+
+Well-known values like `null`, `true`, and `false` get converted to their respective types automatically. Numbers, bytes, and times also get converted. Similar to YAML, anything that doesn't fit one of those is treated as a string. This automatic coercion can be disabled by just wrapping your value in quotes.
 
 ```sh
 # With coercion
@@ -97,7 +130,7 @@ $ j empty: null, bool: true, num: 1.5, string: hello
 }
 
 # As strings
-$ j empty:~ null, bool:~ true, num:~ 1.5, string:~ hello
+$ j empty: "null", bool: "true", num: "1.5", string: "hello"
 {
   "bool": "true",
   "empty": "null",
@@ -106,21 +139,10 @@ $ j empty:~ null, bool:~ true, num:~ 1.5, string:~ hello
 }
 
 # Passing the empty string
-$ j blank:~
+$ j blank1: , blank2: ""
 {
-  "blank": ""
-}
-
-# Passing a tilde using whitespace
-$ j foo: ~/Documents
-{
-  "foo": "~/Documents"
-}
-
-# Passing a tilde using forced strings
-$ j foo:~~/Documents
-{
-  "foo": "~/Documents"
+  "blank1": "",
+  "blank2": ""
 }
 ```
 
@@ -157,32 +179,32 @@ $ j foo.bar{id: 1, count.clicks: 5}
 
 ### Arrays
 
-Simple arrays use a `,` between values. Nested arrays use square brackets `[` and `]` to specify the zero-based index to insert an item. Use a blank index to append to the array.
+Arrays are surrounded by square brackets like in JSON:
 
 ```sh
-# Array shorthand
-$ j a: 1, 2, 3
-{
-  "a": [
-    1,
-    2,
-    3
-  ]
-}
+# Simple array
+$ j [1, 2, 3]
+[
+  1,
+  2,
+  3
+]
+```
 
+Array indexes use square brackets `[` and `]` to specify the zero-based index to set an item. If the index is out of bounds then `null` values are added as necessary to fill the array. Use an empty index `[]` to append to the an existing array. If the item is not an array, then a new one will be created.
+
+```sh
 # Nested arrays
-$ j a[0][2][0]: 1
-{
-  "a": [
+$ j [0][2][0]: 1
+[
+  [
+    null,
+    null,
     [
-      null,
-      null,
-      [
-        1
-      ]
+      1
     ]
   ]
-}
+]
 
 # Appending arrays
 $ j a[]: 1, a[]: 2, a[]: 3
@@ -195,58 +217,9 @@ $ j a[]: 1, a[]: 2, a[]: 3
 }
 ```
 
-### Backreferences
-
-Since the shorthand syntax is context-aware, it is possible to use the current context to reference back to the most recently used object or array when creating new properties or items.
-
-```sh
-# Backref with object properties
-$ j foo.bar: 1, .baz: 2
-{
-  "foo": {
-    "bar": 1,
-    "baz": 2
-  }
-}
-
-# Backref with array appending
-$ j foo.bar[]: 1, []: 2, []: 3
-{
-  "foo": {
-    "bar": [
-      1,
-      2,
-      3
-    ]
-  }
-}
-
-# Easily build complex structures
-$ j name: foo, tags[]{id: 1, count.clicks: 5, .sales: 1}, []{id: 2, count.clicks: 8, .sales: 2}
-{
-  "name": "foo",
-  "tags": [
-    {
-      "count": {
-        "clicks": 5,
-        "sales": 1
-      },
-      "id": 1
-    },
-    {
-      "count": {
-        "clicks": 8,
-        "sales": 2
-      },
-      "id": 2
-    }
-  ]
-}
-```
-
 ### Loading from Files
 
-Sometimes a field makes more sense to load from a file than to be specified on the commandline. The `@` preprocessor and `~` & `%` modifiers let you load structured data, strings, and base64-encoded data into values.
+Sometimes a field makes more sense to load from a file than to be specified on the commandline. The `@` preprocessor lets you load structured data, text, and bytes depending on the file extension and whether all bytes are valid UTF-8:
 
 ```sh
 # Load a file's value as a parameter
@@ -262,27 +235,133 @@ $ j foo: @hello.json
     "hello": "world"
   }
 }
-
-# Force loading a string
-$ j foo: @~hello.json
-{
-  "foo": "{\n  \"hello\": \"world\"\n}"
-}
-
-# Load as base 64 data
-$ j foo: @%hello.json
-{
-  "foo": "ewogICJoZWxsbyI6ICJ3b3JsZCIKfQ=="
-}
 ```
 
-Remember, it's possible to disable this behavior with the string modifier `~`:
+Remember, it's possible to disable this behavior with quotes:
 
 ```sh
-$ j twitter:~ @user
+$ j 'twitter: "@user"'
 {
   "twitter": "@user"
 }
+```
+
+### Patch (Partial Update)
+
+Partial updates are supported on existing data, which can be used to implement HTTP `PATCH`, templating, and other similar features. This feature combines the best of both:
+
+- [JSON Merge Patch](https://datatracker.ietf.org/doc/html/rfc7386)
+- [JSON Patch](https://www.rfc-editor.org/rfc/rfc6902)
+
+Partial updates support:
+
+- Appending arrays via `[]`
+- Inserting before via `[^index]`
+- Removing fields or array items via `undefined`
+- Moving/swapping fields or array items via `^`
+  - The right hand side is a path to the value to swap
+
+Some examples:
+
+```sh
+# First, let's create some data we'll modify later
+$ j id: 1, tags: [a, b, c] >data.json
+
+# Now let's append to the tags array
+$ j <data.json 'tags[]: d'
+{
+  "id": 1,
+  "tags": [
+    "a",
+    "b",
+    "c",
+    "d"
+  ]
+}
+
+# Array item insertion
+$ j <data.json 'tags[^0]: z'
+{
+  "id": 1,
+  "tags": [
+    "z",
+    "a",
+    "b",
+    "c"
+  ]
+}
+
+# Remove stuff
+$ j <data.json 'id: undefined, tags[1]: undefined'
+{
+  "tags": [
+    "a",
+    "c"
+  ]
+}
+
+# Rename the ID property, and swap the first/last array items
+$ j <data.json 'id ^ name, tags[0] ^ tags[-1]'
+{
+  "name": 1,
+  "tags": [
+    "c",
+    "b",
+    "a"
+  ]
+}
+```
+
+### Querying
+
+A data query language similar to the swap patch selection above is included, which allows you to query, filter, and select fields to return. This functionality is similar to, but simpler than, tools like:
+
+- [jq](https://stedolan.github.io/jq/)
+- [JMESPath](http://jmespath.org/)
+- [JSON Path](https://www.ietf.org/archive/id/draft-ietf-jsonpath-base-06.html)
+
+The query language supports:
+
+- Paths for objects & arrays `foo.items.name`
+- Array indexing `foo.items[1].name`
+- Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
+- Object property selection `foo.{created, names: items.name}`
+- Stopping processing with a pipe `|`
+- Flattening nested arrays `[]`
+
+Examples:
+
+```sh
+# First, let's make a complex file to query
+$ j 'users: [{id: 1, age: 5, friends: [a, b]}, {id: 2, age: 6, friends: [b, c]}, {id: 3, age: 5, friends: [c, d]}]' >data.json
+
+# Query for each user's ID
+$ j <data.json -q 'users.id'
+[
+  1,
+  2,
+  3
+]
+
+# Get the users who are friends with `b`
+$ j <data.json -q 'users[friends contains "b"].id'
+[
+  1,
+  2
+]
+
+# Get the ID & age of users who are friends with `b`
+$ j <data.json -q 'users[friends contains "b"].{id, age}'
+[
+  {
+    "age": null,
+    "id": 1
+  },
+  {
+    "age": null,
+    "id": 2
+  }
+]
 ```
 
 ## Library Usage
@@ -318,11 +397,28 @@ example := map[string]interface{}{
   },
 }
 
-// Prints "hello: world, labels: one, two"
+// Prints "hello: world, labels: [one, two]"
 fmt.Println(shorthand.Get(example))
 ```
 
-## Implementation
+## Benchmarks
+
+Shorthand v2 has been completely rewritten from the ground up and is over 20 times faster than v1, putting it at a similar speed/efficiency as the standard library's `encoding/json` package while supporting some compelling additional features:
+
+```sh
+$ go test -bench=.
+goos: darwin
+goarch: amd64
+pkg: github.com/danielgtaylor/shorthand
+cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
+BenchmarkMinJSON-12      	  534352	      2132 ns/op	    1808 B/op	      31 allocs/op
+BenchmarkShorthandV2-12  	  309817	      3825 ns/op	    1888 B/op	      55 allocs/op
+BenchmarkShorthandV1-12  	   14670	     83901 ns/op	   36436 B/op	     745 allocs/op
+PASS
+ok  	github.com/danielgtaylor/shorthand	4.750s
+```
+
+## Design & Implementation
 
 The shorthand syntax is implemented as a [PEG](https://en.wikipedia.org/wiki/Parsing_expression_grammar) grammar which creates an AST-like object that is used to build an in-memory structure that can then be serialized out into formats like JSON, YAML, TOML, etc.
 
