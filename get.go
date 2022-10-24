@@ -1,6 +1,7 @@
 package shorthand
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -109,11 +110,21 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 				return false, index, index, "", nil
 			}
 		} else {
+			if indexes[0] == "" {
+				indexes[0] = "0"
+			}
 			if startIndex, err := strconv.Atoi(indexes[0]); err == nil {
+				if indexes[1] == "" {
+					indexes[1] = "-1"
+				}
 				if stopIndex, err := strconv.Atoi(indexes[1]); err == nil {
 					return true, startIndex, stopIndex, "", nil
 				}
 			}
+		}
+
+		if value[0] == '?' {
+			value = value[1:]
 		}
 	}
 
@@ -123,7 +134,10 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 func (d *Document) getFiltered(expr string, input any) (any, Error) {
 	ast, err := mexpr.Parse(expr, nil)
 	if err != nil {
-		return nil, NewError(&d.expression, d.pos+uint(err.Offset()), uint(err.Length()), err.Error())
+		// Pos = current - expression - 1 for bracket + error offset.
+		// a.b.c[filter is here]
+		// current position....^
+		return nil, NewError(&d.expression, d.pos-uint(len(expr)+1)+uint(err.Offset()), uint(err.Length()), err.Error())
 	}
 	interpreter := mexpr.NewInterpreter(ast, mexpr.UnquotedStrings)
 	savedPos := d.pos
@@ -152,41 +166,65 @@ func (d *Document) getFiltered(expr string, input any) (any, Error) {
 	return nil, nil
 }
 
-func (d *Document) getIndex2(input any) (any, Error) {
+func (d *Document) getPathIndex(input any) (any, Error) {
 	isSlice, startIndex, stopIndex, expr, err := d.parsePathIndex()
 	if err != nil {
 		return nil, err
+	}
+
+	if d.options.DebugLogger != nil {
+		d.options.DebugLogger("Getting index %v:%v %v", startIndex, stopIndex, expr)
 	}
 
 	if expr != "" {
 		return d.getFiltered(expr, input)
 	}
 
-	if s, ok := input.([]any); ok {
-		if startIndex > len(s)-1 || stopIndex > len(s)-1 {
-			return nil, nil
-		}
-		for startIndex < 0 {
-			startIndex += len(s)
-		}
-		for stopIndex < 0 {
-			stopIndex += len(s)
-		}
+	l := 0
+	switch t := input.(type) {
+	case string:
+		l = len(t)
+	case []byte:
+		l = len(t)
+	case []any:
+		l = len(t)
+	}
 
+	if startIndex < 0 {
+		startIndex += l
+	}
+	if stopIndex < 0 {
+		stopIndex += l
+	}
+	if startIndex < 0 || startIndex > l-1 || stopIndex < 0 || stopIndex > l-1 || startIndex > stopIndex {
+		return nil, nil
+	}
+
+	switch t := input.(type) {
+	case string:
 		if !isSlice {
-			return s[startIndex], nil
+			return string(t[startIndex]), nil
 		}
-
-		return s[startIndex : stopIndex+1], nil
+		return t[startIndex : stopIndex+1], nil
+	case []byte:
+		if !isSlice {
+			return t[startIndex], nil
+		}
+		return t[startIndex : stopIndex+1], nil
+	case []any:
+		if !isSlice {
+			return t[startIndex], nil
+		}
+		return t[startIndex : stopIndex+1], nil
 	}
 
 	return nil, nil
 }
 
-func (d *Document) parseProp2() (any, Error) {
+func (d *Document) parseGetProp() (any, Error) {
 	d.skipWhitespace()
 	start := d.pos
-	quoted, canSlice, err := d.parseUntil(0, '.', '[', '|', ',', '}')
+	quoted, canSlice, err := d.parseUntil(0, '.', '[', '|', ',', '}', ']')
 	if err != nil {
 		return nil, err
 	}
@@ -208,23 +246,7 @@ func (d *Document) parseProp2() (any, Error) {
 }
 
 func (d *Document) getProp(input any) (any, bool, Error) {
-	if s, ok := input.([]any); ok {
-		var err Error
-		savedPos := d.pos
-		out := make([]any, len(s))
-
-		for i := range s {
-			d.pos = savedPos
-			out[i], _, err = d.getPath(s[i])
-			if err != nil {
-				return nil, false, err
-			}
-		}
-
-		return out, true, nil
-	}
-
-	key, err := d.parseProp2()
+	key, err := d.parseGetProp()
 	if err != nil {
 		return nil, false, err
 	}
@@ -241,12 +263,78 @@ func (d *Document) getProp(input any) (any, bool, Error) {
 	} else if m, ok := input.(map[any]any); ok {
 		v, ok := m[key]
 		return v, ok, nil
+	} else {
+		if d.options.DebugLogger != nil {
+			d.options.DebugLogger("Cannot get key %v from input %v", key, input)
+		}
 	}
 
 	return nil, false, nil
 }
 
+func (d *Document) getPropRecursive(input any) ([]any, Error) {
+	key, err := d.parseGetProp()
+	if err != nil {
+		return nil, err
+	}
+
+	if d.options.DebugLogger != nil {
+		d.options.DebugLogger("Recursive getting key '%v'", key)
+	}
+
+	return d.findPropRecursive(key, input)
+}
+
+func (d *Document) findPropRecursive(key, input any) ([]any, Error) {
+	results := []any{}
+
+	savedPos := d.pos
+	if m, ok := input.(map[string]any); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := m[k]
+			if s, ok := key.(string); ok {
+				if k == s {
+					results = append(results, v)
+				}
+			}
+			d.pos = savedPos
+			if tmp, err := d.findPropRecursive(key, v); err == nil {
+				results = append(results, tmp...)
+			}
+		}
+	}
+	if m, ok := input.(map[any]any); ok {
+		for k, v := range m {
+			if k == key {
+				results = append(results, v)
+			}
+			d.pos = savedPos
+			if tmp, err := d.findPropRecursive(key, v); err == nil {
+				results = append(results, tmp...)
+			}
+		}
+	}
+	if s, ok := input.([]any); ok {
+		for _, v := range s {
+			d.pos = savedPos
+			if tmp, err := d.findPropRecursive(key, v); err == nil {
+				results = append(results, tmp...)
+			}
+		}
+	}
+
+	return results, nil
+}
+
 func (d *Document) flatten(input any) (any, Error) {
+	if d.options.DebugLogger != nil {
+		d.options.DebugLogger("Flattening %v", input)
+	}
 	if s, ok := input.([]any); ok {
 		out := make([]any, 0, len(s))
 
@@ -285,13 +373,49 @@ outer:
 				found = true
 				continue
 			}
-			input, err = d.getIndex2(input)
+			input, err = d.getPathIndex(input)
 			if err != nil {
 				return nil, false, err
 			}
 			found = true
 		case '.':
 			d.next()
+			if d.peek() == '.' {
+				// Special case: recursive descent property query
+				// i.e. find this key recursively through everything
+				d.next()
+				input, err = d.getPropRecursive(input)
+				if err != nil {
+					return nil, false, err
+				}
+			}
+			if s, ok := input.([]any); ok {
+				// Special case: input is an slice of items, so run the right hand
+				// side on every item in the slice.
+				var err Error
+				var result any
+				savedPos := d.pos
+				out := make([]any, 0, len(s))
+
+				if len(s) == 0 {
+					// We will get `nil`, but still need to move the read head forwards to
+					// prevent an infinite loop here.
+					d.getPath(nil)
+				}
+
+				for i := range s {
+					d.pos = savedPos
+					result, _, err = d.getPath(s[i])
+					if err != nil {
+						return nil, false, err
+					}
+					if result != nil {
+						out = append(out, result)
+					}
+				}
+
+				return out, true, nil
+			}
 			continue
 		case '{':
 			d.next()
@@ -301,6 +425,8 @@ outer:
 			}
 			found = true
 			continue
+		case ',', ']', '}':
+			d.next()
 		default:
 			input, found, err = d.getProp(input)
 			if err != nil {
@@ -352,23 +478,27 @@ func (d *Document) getFields(input any) (any, Error) {
 		if r == '}' {
 			open--
 		}
-		if r == ',' || open == 0 {
+		if open == 0 || (open == 1 && r == ',') {
 			path := d.buf.String()
-			if m, ok := input.(map[string]any); ok {
-				if key == "" {
-					result[path] = m[path]
-				} else {
-					expr, pos := d.expression, d.pos
-					tmp, _, err := GetPath(path, input, GetOptions{
-						DebugLogger: d.options.DebugLogger,
-					})
-					d.expression, d.pos = expr, pos
-					if err != nil {
-						return nil, err
-					}
-					result[key] = tmp
+			var value any
+			if key == "" {
+				key = path
+				if m, ok := input.(map[any]any); ok {
+					value = m[key]
+				}
+				if m, ok := input.(map[string]any); ok {
+					value = m[key]
+				}
+			} else {
+				var err Error
+				value, _, err = GetPath(path, input, GetOptions{
+					DebugLogger: d.options.DebugLogger,
+				})
+				if err != nil {
+					return nil, err
 				}
 			}
+			result[key] = value
 			if r == '}' {
 				break
 			}

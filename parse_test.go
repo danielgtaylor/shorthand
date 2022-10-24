@@ -10,6 +10,24 @@ import (
 
 type l = []interface{}
 
+func (d *Document) marshalOps() interface{} {
+	ops := make([]interface{}, len(d.Operations))
+
+	for i, op := range d.Operations {
+		s := []interface{}{}
+		if op.Kind != OpSet {
+			s = append(s, op.Kind)
+		}
+		s = append(s, op.Path)
+		if op.Value != nil {
+			s = append(s, op.Value)
+		}
+		ops[i] = s
+	}
+
+	return ops
+}
+
 var parseExamples = []struct {
 	Name            string
 	Existing        interface{}
@@ -75,7 +93,7 @@ var parseExamples = []struct {
 		JSON:  `[["a[0][0].b[0][0]", 1], ["a[0][0].b[1][0].c[0]", 2]]`,
 	},
 	{
-		Name: "Multiline",
+		Name: "Multiline optional commas",
 		Input: `{
 			a: 1
 			b{
@@ -178,7 +196,7 @@ func TestParser(t *testing.T) {
 				},
 			)
 			err := d.Parse(example.Input)
-			result := d.Marshal()
+			result := d.marshalOps()
 
 			if example.Error == "" {
 				require.NoError(t, err)

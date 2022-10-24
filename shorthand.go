@@ -4,52 +4,26 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	modifierNone = iota
-	modifierString
-)
-
-// DeepAssign recursively merges a source map into the target.
-func DeepAssign(target, source map[string]interface{}) {
-	for k, v := range source {
-		if vm, ok := v.(map[string]interface{}); ok {
-			if _, ok := target[k]; ok {
-				if tkm, ok := target[k].(map[string]interface{}); ok {
-					DeepAssign(tkm, vm)
-				} else {
-					target[k] = vm
-				}
-			} else {
-				target[k] = vm
-			}
-		} else {
-			target[k] = v
-		}
-	}
-}
-
-func ConvertMapString(value interface{}) interface{} {
+func ConvertMapString(value any) any {
 	switch tmp := value.(type) {
-	case map[interface{}]interface{}:
-		m := make(map[string]interface{}, len(tmp))
+	case map[any]any:
+		m := make(map[string]any, len(tmp))
 		for k, v := range tmp {
 			m[fmt.Sprintf("%v", k)] = ConvertMapString(v)
 		}
 		return m
-	case map[string]interface{}:
+	case map[string]any:
 		for k, v := range tmp {
 			tmp[k] = ConvertMapString(v)
 		}
-	case []interface{}:
+	case []any:
 		for i, v := range tmp {
 			tmp[i] = ConvertMapString(v)
 		}
@@ -60,24 +34,23 @@ func ConvertMapString(value interface{}) interface{} {
 
 // GetInput loads data from stdin (if present) and from the passed arguments,
 // returning the final structure.
-func GetInput(args []string) (interface{}, error) {
-	stat, _ := os.Stdin.Stat()
-	return getInput(stat.Mode(), os.Stdin, args, ParseOptions{
+func GetInput(args []string) (any, error) {
+	return GetInputWithOptions(args, ParseOptions{
 		EnableFileInput:       true,
 		EnableObjectDetection: true,
 	})
 }
 
-func GetInputWithOptions(args []string, options ParseOptions) (interface{}, error) {
+func GetInputWithOptions(args []string, options ParseOptions) (any, error) {
 	stat, _ := os.Stdin.Stat()
 	return getInput(stat.Mode(), os.Stdin, args, options)
 }
 
-func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options ParseOptions) (interface{}, error) {
-	var stdin interface{}
+func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options ParseOptions) (any, error) {
+	var stdin any
 
 	if (mode & os.ModeCharDevice) == 0 {
-		d, err := ioutil.ReadAll(stdinFile)
+		d, err := io.ReadAll(stdinFile)
 		if err != nil {
 			return nil, err
 		}
@@ -94,47 +67,108 @@ func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options Pars
 		return stdin, nil
 	}
 
-	d := Document{
-		options: options,
-	}
-	if err := d.Parse(strings.Join(args, " ")); err != nil {
-		return nil, err
-	}
-
-	data, err := d.Apply(stdin)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return Unmarshal(strings.Join(args, " "), options, stdin)
 }
 
-func Parse(input string, options ParseOptions, existing interface{}) (interface{}, Error) {
+func Unmarshal(input string, options ParseOptions, existing any) (any, Error) {
 	d := Document{options: options}
-	if err := d.Parse(input); err != nil {
-		return nil, err
+	return d.Unmarshal(input, existing)
+}
+
+type MarshalOptions struct {
+	Indent  string
+	Spacer  string
+	UseFile bool
+}
+
+func (o MarshalOptions) GetIndent(level int) string {
+	if o.Indent == "" {
+		return ""
 	}
-	return d.Apply(existing)
+	result := "\n"
+	for i := 0; i < level; i++ {
+		result += o.Indent
+	}
+	return result
 }
 
-// Get the shorthand representation of an input map.
-func Get(input map[string]interface{}) string {
-	result := renderValue(true, input)
-	return result[1 : len(result)-1]
+func (o MarshalOptions) GetSeparator(level int) string {
+	if o.Indent != "" {
+		return o.GetIndent(level)
+	}
+
+	return "," + o.Spacer
 }
 
-func renderValue(start bool, value interface{}) string {
-	// Go uses `<nil>` so here we hard-code `null` to match JSON/YAML.
+func Marshal(input any, options ...MarshalOptions) string {
+	if len(options) == 0 {
+		options = []MarshalOptions{{}}
+	}
+	return renderValue(options[0], 0, false, input)
+}
+
+func MarshalCLI(input any) string {
+	result := Marshal(input, MarshalOptions{Spacer: " ", UseFile: true})
+	if strings.HasPrefix(result, "{") {
+		result = result[1 : len(result)-1]
+	}
+	return result
+}
+
+func MarshalPretty(input any) string {
+	return Marshal(input, MarshalOptions{Spacer: " ", Indent: "  "})
+}
+
+func renderValue(options MarshalOptions, level int, fromKey bool, value any) string {
+	prefix := ""
+	if fromKey {
+		prefix = ":" + options.Spacer
+	}
+
+	// Go uses `nil` so here we hard-code `null` to match JSON/YAML.
 	if value == nil {
-		return ": null"
+		return prefix + "null"
 	}
 
 	switch v := value.(type) {
-	case map[string]interface{}:
+	case map[any]any:
 		// Special case: foo.bar: 1
-		if !start && len(v) == 1 {
+		if len(v) == 1 {
+			dot := ""
+			if fromKey {
+				dot = "."
+			}
 			for k := range v {
-				return "." + k + renderValue(false, v[k])
+				return dot + fmt.Sprintf("%v", k) + renderValue(options, level, true, v[k])
+			}
+		}
+
+		// Normal case: foo{a: 1, b: 2}
+		var keys []any
+
+		for k := range v {
+			keys = append(keys, k)
+		}
+
+		sort.Slice(keys, func(i, j int) bool {
+			return fmt.Sprintf("%v", keys[i]) < fmt.Sprintf("%v", keys[j])
+		})
+
+		var fields []string
+		for _, k := range keys {
+			fields = append(fields, fmt.Sprintf("%v", k)+renderValue(options, level+1, true, v[k]))
+		}
+
+		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"
+	case map[string]any:
+		// Special case: foo.bar: 1
+		if len(v) == 1 {
+			dot := ""
+			if fromKey {
+				dot = "."
+			}
+			for k := range v {
+				return dot + k + renderValue(options, level, true, v[k])
 			}
 		}
 
@@ -149,53 +183,37 @@ func renderValue(start bool, value interface{}) string {
 
 		var fields []string
 		for _, k := range keys {
-			fields = append(fields, k+renderValue(false, v[k]))
+			kStr := k
+			if canCoerce(k) {
+				kStr = `"` + k + `"`
+			}
+			fields = append(fields, kStr+renderValue(options, level+1, true, v[k]))
 		}
 
-		return "{" + strings.Join(fields, ", ") + "}"
-	case []interface{}:
+		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"
+	case []any:
 		var items []string
 
-		// Special case: foo: [1, 2, 3]
-		scalars := true
+		// Normal case: foo: [1, true, {id: 1, count: 2}]
 		for _, item := range v {
-			switch item.(type) {
-			case map[string]interface{}:
-				scalars = false
-			case []interface{}:
-				scalars = false
-			}
+			items = append(items, renderValue(options, level+1, false, item))
 		}
 
-		if scalars {
-			for _, item := range v {
-				items = append(items, fmt.Sprintf("%v", item))
-			}
-
-			return ": [" + strings.Join(items, ", ") + "]"
-		}
-
-		// Normal case: foo[]: 1, []{id: 1, count: 2}
-		for _, item := range v {
-			items = append(items, "[]"+renderValue(false, item))
-		}
-
-		return strings.Join(items, ", ")
+		return prefix + "[" + options.GetIndent(level+1) + strings.Join(items, options.GetSeparator(level+1)) + options.GetIndent(level) + "]"
 	default:
-		modifier := ""
-
 		if s, ok := v.(string); ok {
-			_, err := strconv.ParseFloat(s, 64)
-
-			if err == nil || s == "null" || s == "true" || s == "false" {
-				modifier = "~"
+			if canCoerce(s) {
+				// This is a string but needs to be quoted so it doesn't get coerced
+				// into some other type when parsed.
+				v = `"` + strings.Replace(s, `"`, `\"`, -1) + `"`
 			}
 
-			if len(s) > 50 || strings.Contains(s, "\n") {
+			if options.UseFile && (len(s) > 50 || strings.Contains(s, "\n")) {
+				// Long strings are represented as being loaded from files.
 				v = "@file"
 			}
 		}
 
-		return fmt.Sprintf(":%s %v", modifier, v)
+		return fmt.Sprintf("%s%v", prefix, v)
 	}
 }

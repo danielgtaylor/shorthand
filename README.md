@@ -8,7 +8,7 @@ Shorthand is a superset and friendlier variant of JSON designed with several use
 | -------------------- | ------------------------------------------------ |
 | CLI arguments/input  | `my-cli post 'foo.bar[0]{baz: 1, hello: world}'` |
 | Patch operations     | `name: undefined, item.tags[]: appended`         |
-| Query language       | `items[created before "2022-01-01"].{id, tags}`  |
+| Query language       | `items[created before 2022-01-01].{id, tags}`    |
 | Configuration format | `{json.save.autoFormat: true}`                   |
 
 The shorthand syntax supports the following features, described in more detail with examples below:
@@ -25,7 +25,11 @@ The shorthand syntax supports the following features, described in more detail w
   - Moving properties & items
 - Querying, array filtering, and field selection
 
-The following are both completely valid shorthand and result in the same output:
+The following are all completely valid shorthand and result in the same output:
+
+```
+foo.bar[]{baz: 1, hello: world}
+```
 
 ```
 {
@@ -49,7 +53,7 @@ The following are both completely valid shorthand and result in the same output:
 }
 ```
 
-This library has excellent test coverage and is additionally fuzz tested to ensure correctness and prevent panics.
+This library has excellent test coverage to ensure correctness and is additionally fuzz tested to prevent panics.
 
 ## Alternatives & Inspiration
 
@@ -161,7 +165,7 @@ $ j foo.bar.baz: 1
 }
 ```
 
-Properties of nested objects can be grouped by placing them inside `{` and `}`.
+Properties of nested objects can be grouped by placing them inside `{` and `}`. The `:` becomes optional for nested objects, so `foo.bar: {...}` is equivalent to `foo.bar{...}`.
 
 ```sh
 $ j foo.bar{id: 1, count.clicks: 5}
@@ -259,7 +263,7 @@ Partial updates support:
 - Inserting before via `[^index]`
 - Removing fields or array items via `undefined`
 - Moving/swapping fields or array items via `^`
-  - The right hand side is a path to the value to swap
+  - The right hand side is a path to the value to swap. See Querying below for the path syntax.
 
 Some examples:
 
@@ -279,7 +283,7 @@ $ j <data.json 'tags[]: d'
   ]
 }
 
-# Array item insertion
+# Array item insertion (prepend the array)
 $ j <data.json 'tags[^0]: z'
 {
   "id": 1,
@@ -314,7 +318,7 @@ $ j <data.json 'id ^ name, tags[0] ^ tags[-1]'
 
 ### Querying
 
-A data query language similar to the swap patch selection above is included, which allows you to query, filter, and select fields to return. This functionality is similar to, but simpler than, tools like:
+A data query language is included, which allows you to query, filter, and select fields to return. This functionality is used by the patch move operations described above and is similar to, but simpler than, tools like:
 
 - [jq](https://stedolan.github.io/jq/)
 - [JMESPath](http://jmespath.org/)
@@ -323,9 +327,10 @@ A data query language similar to the swap patch selection above is included, whi
 The query language supports:
 
 - Paths for objects & arrays `foo.items.name`
-- Array indexing `foo.items[1].name`
+- Array indexing & slicing `foo.items[1].name`
 - Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
 - Object property selection `foo.{created, names: items.name}`
+- Recursive search `foo..name`
 - Stopping processing with a pipe `|`
 - Flattening nested arrays `[]`
 
@@ -344,14 +349,14 @@ $ j <data.json -q 'users.id'
 ]
 
 # Get the users who are friends with `b`
-$ j <data.json -q 'users[friends contains "b"].id'
+$ j <data.json -q 'users[friends contains b].id'
 [
   1,
   2
 ]
 
 # Get the ID & age of users who are friends with `b`
-$ j <data.json -q 'users[friends contains "b"].{id, age}'
+$ j <data.json -q 'users[friends contains b].{id, age}'
 [
   {
     "age": null,
@@ -366,7 +371,7 @@ $ j <data.json -q 'users[friends contains "b"].{id, age}'
 
 ## Library Usage
 
-The `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments:
+Aside from `Marshal` and `Unmarshal` functions, the `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments:
 
 ```go
 package main
@@ -398,42 +403,62 @@ example := map[string]interface{}{
 }
 
 // Prints "hello: world, labels: [one, two]"
-fmt.Println(shorthand.Get(example))
+fmt.Println(shorthand.MarshalCLI(example))
 ```
 
 ## Benchmarks
 
-Shorthand v2 has been completely rewritten from the ground up and is over 20 times faster than v1, putting it at a similar speed/efficiency as the standard library's `encoding/json` package while supporting some compelling additional features:
+Shorthand v2 has been completely rewritten from the ground up and is over 20 times faster than v1, putting it at a similar speed/efficiency as the standard library's `encoding/json` package and faster than the popular YAML package while supporting some compelling additional features:
 
 ```sh
-$ go test -bench=.
-goos: darwin
-goarch: amd64
-pkg: github.com/danielgtaylor/shorthand
-cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-BenchmarkMinJSON-12      	  534352	      2132 ns/op	    1808 B/op	      31 allocs/op
-BenchmarkShorthandV2-12  	  309817	      3825 ns/op	    1888 B/op	      55 allocs/op
-BenchmarkShorthandV1-12  	   14670	     83901 ns/op	   36436 B/op	     745 allocs/op
-PASS
-ok  	github.com/danielgtaylor/shorthand	4.750s
+# Comparing new (V2) vs. old (V1)
+BenchmarkShorthandV2-12     309817    3825 ns/op    1888 B/op    54 allocs/op
+BenchmarkShorthandV1-12      14670   83901 ns/op   36436 B/op   745 allocs/op
+
+# Comparing JSON & YAML to Shorthand
+BenchmarkMinJSON-10         825459    1446 ns/op    1808 B/op    31 allocs/op
+BenchmarkFormattedJSON-10   707174    1658 ns/op    1712 B/op    30 allocs/op
+
+BenchmarkYAML-10            107493   11053 ns/op   12100 B/op   140 allocs/op
+
+BenchmarkShorthand-10       477285    2389 ns/op    1888 B/op    54 allocs/op
+BenchmarkPretty-10          403887    2848 ns/op    1888 B/op    54 allocs/op
+BenchmarkParse-10          1277103     938 ns/op     160 B/op    12 allocs/op
+BenchmarkApply-10           811148    1421 ns/op    1733 B/op    42 allocs/op
+
+# Comparing Shorthand get path to JMESPath
+BenchmarkGetJMESPathSimple-10  414164   2790 ns/op   5799 B/op   74 allocs/op
+BenchmarkGetPathSimple-10     4332314    276 ns/op    224 B/op    5 allocs/op
+
+BenchmarkGetJMESPath-10        224778   5289 ns/op   9374 B/op   119 allocs/op
+BenchmarkGetPath-10            793628   1437 ns/op   1192 B/op    27 allocs/op
+
+BenchmarkGetJMESPathFlat-10   1743403  688.6 ns/op    632 B/op    14 allocs/op
+BenchmarkGetPathFlat-10       1964098  610.3 ns/op    560 B/op    12 allocs/op
 ```
 
 ## Design & Implementation
 
-The shorthand syntax is implemented as a [PEG](https://en.wikipedia.org/wiki/Parsing_expression_grammar) grammar which creates an AST-like object that is used to build an in-memory structure that can then be serialized out into formats like JSON, YAML, TOML, etc.
+The shorthand syntax is implemented as a custom parser split into two pieces: `parse.go` to parse a shorthand input into a set of operations and `apply.go` to provide the mechanism for applying those operations on an existing input (or `nil`). Every operation will either set, delete, or swap some value or path. For example:
 
-The `shorthand.peg` file implements the parser while the `shorthand.go` file implements the builder. Here's how you can test local changes to the grammar:
+```
+# Input
+foo.bar{id: 1, tags: [{value: a}, {value: b}]}
+
+# Parsed
+[
+  [OpSet, "foo.bar.id", 1],
+  [OpSet, "foo.bar.tags[0].value", "a"],
+  [OpSet, "foo.bar.tags[1].value", "b"]
+]
+```
+
+This simplifies the code to apply changes, as it can process each operation independently.
+
+The file `get.go` provides an implementation of path parsing. It also utilizes [danielgtaylor/mexpr](https://github.com/danielgtaylor/mexpr), a top-down operator precedence (Pratt) parser for simple filter expressions.
+
+No special steps are necessary to test local changes to the grammar. You can just run the included `j` utility to test:
 
 ```sh
-# One-time setup: install PEG compiler
-$ go get -u github.com/mna/pigeon
-
-# Make your shorthand.peg edits. Then:
-$ go generate
-
-# Next, rebuild the j executable.
-$ go install ./cmd/j
-
-# Now, try it out!
-$ j <your-new-thing>
+$ go run ./cmd/j your: new feature here
 ```

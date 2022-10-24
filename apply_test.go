@@ -276,7 +276,7 @@ func TestApply(t *testing.T) {
 				require.Contains(t, err.Error(), example.Error)
 			}
 
-			ops := d.Marshal()
+			ops := d.marshalOps()
 			b, _ := json.Marshal(ops)
 			t.Log(string(b))
 

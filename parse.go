@@ -3,7 +3,7 @@ package shorthand
 import (
 	"encoding/base64"
 	"encoding/json"
-	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -477,7 +477,7 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 						d.options.DebugLogger("Found file %s", filename)
 					}
 
-					data, err := ioutil.ReadFile(filename)
+					data, err := os.ReadFile(filename)
 					if err != nil {
 						return d.error(uint(len(value)), "Unable to read file: %v", err)
 					}

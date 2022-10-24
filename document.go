@@ -57,33 +57,6 @@ func NewDocument(options ParseOptions) *Document {
 	}
 }
 
-func (d *Document) String() string {
-	// TODO: serialize to text format
-	return ""
-}
-
-func (d *Document) Unmarshal(data []byte) {
-	// TODO: load from JSON/CBOR representation
-}
-
-func (d *Document) Marshal() interface{} {
-	ops := make([]interface{}, len(d.Operations))
-
-	for i, op := range d.Operations {
-		s := []interface{}{}
-		if op.Kind != OpSet {
-			s = append(s, op.Kind)
-		}
-		s = append(s, op.Path)
-		if op.Value != nil {
-			s = append(s, op.Value)
-		}
-		ops[i] = s
-	}
-
-	return ops
-}
-
 func (d *Document) Parse(input string) Error {
 	d.expression = input
 	d.pos = 0
@@ -130,4 +103,11 @@ func (d *Document) Apply(input interface{}) (interface{}, Error) {
 	}
 
 	return input, nil
+}
+
+func (d *Document) Unmarshal(input string, existing any) (any, Error) {
+	if err := d.Parse(input); err != nil {
+		return nil, err
+	}
+	return d.Apply(existing)
 }

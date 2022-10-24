@@ -56,7 +56,8 @@ func main() {
 				if selected, ok, err := shorthand.GetPath(*query, result, shorthand.GetOptions{DebugLogger: debugLog}); ok {
 					result = selected
 				} else if err != nil {
-					panic(err)
+					fmt.Println(err.Pretty())
+					os.Exit(1)
 				} else {
 					fmt.Println("No match")
 					return
@@ -82,8 +83,7 @@ func main() {
 					}
 				}
 			case "shorthand":
-				// TODO: fix to support non-maps
-				marshalled = []byte(shorthand.Get(result.(map[string]interface{})))
+				marshalled = []byte(shorthand.MarshalPretty(result))
 			}
 
 			if err != nil {
