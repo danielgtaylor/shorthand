@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmespath/go-jmespath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,10 +24,39 @@ var getExamples = []struct {
 		Go:    "value",
 	},
 	{
+		Name: "Field non string",
+		Input: map[any]any{
+			1: true,
+		},
+		Query: "1",
+		Go:    true,
+	},
+	{
 		Name:  "Nested fields",
 		Input: `{"f1": {"f2": {"f3": true}}}`,
 		Query: `f1.f2.f3`,
 		Go:    true,
+	},
+	{
+		Name:  "Wildcard fields",
+		Input: `{"f1": {"unknown1": {"id": 1}, "unknown2": {"id": 2}}}`,
+		Query: `f1.*.id`,
+		Go:    []any{1.0, 2.0},
+	},
+	{
+		Name: "Wildcard field non string",
+		Input: map[any]any{
+			"f1": map[any]any{
+				"unknown1": map[any]any{
+					"id": 1.0,
+				},
+				"unknown2": map[any]any{
+					"id": 2.0,
+				},
+			},
+		},
+		Query: `f1.*.id`,
+		Go:    []any{1.0, 2.0},
 	},
 	{
 		Name:  "Recursive fields",
@@ -77,6 +105,12 @@ var getExamples = []struct {
 		Input: `{"items": [{"f1": {"f2": 1}}, {"f1": {"f2": 2}}, {"other": 3}]}`,
 		Query: `items[f1 and f1.f2 > 1].f1.f2`,
 		Go:    []any{2.0},
+	},
+	{
+		Name:  "Array filtering nested brackets",
+		Input: `{"items": [{"id": 1, "tags": ["a", "b"]}]}`,
+		Query: `items[tags[0] == "abc"[0]].id`,
+		Go:    []any{1.0},
 	},
 	{
 		Name:  "Array filtering first match",
@@ -170,51 +204,51 @@ var getBenchInput = map[string]any{
 	},
 }
 
-func BenchmarkGetJMESPathSimple(b *testing.B) {
-	b.ReportAllocs()
+// func BenchmarkGetJMESPathSimple(b *testing.B) {
+// 	b.ReportAllocs()
 
-	query := "items[1].name"
+// 	query := "items[1].name"
 
-	out, err := jmespath.Search(query, getBenchInput)
-	require.NoError(b, err)
-	require.Equal(b, "Item 1", out)
+// 	out, err := jmespath.Search(query, getBenchInput)
+// 	require.NoError(b, err)
+// 	require.Equal(b, "Item 1", out)
 
-	for n := 0; n < b.N; n++ {
-		jmespath.Search(query, getBenchInput)
-	}
-}
+// 	for n := 0; n < b.N; n++ {
+// 		jmespath.Search(query, getBenchInput)
+// 	}
+// }
 
-func BenchmarkGetJMESPath(b *testing.B) {
-	b.ReportAllocs()
+// func BenchmarkGetJMESPath(b *testing.B) {
+// 	b.ReportAllocs()
 
-	query := "items[-1].{name: name, price: price, f: tags[?starts_with(@, `\"f\"`)]}"
+// 	query := "items[-1].{name: name, price: price, f: tags[?starts_with(@, `\"f\"`)]}"
 
-	out, err := jmespath.Search(query, getBenchInput)
-	require.NoError(b, err)
-	require.Equal(b, map[string]any{
-		"name":  "Item 2",
-		"price": 1.50,
-		"f":     []any{"four", "five"},
-	}, out)
+// 	out, err := jmespath.Search(query, getBenchInput)
+// 	require.NoError(b, err)
+// 	require.Equal(b, map[string]any{
+// 		"name":  "Item 2",
+// 		"price": 1.50,
+// 		"f":     []any{"four", "five"},
+// 	}, out)
 
-	for n := 0; n < b.N; n++ {
-		jmespath.Search(query, getBenchInput)
-	}
-}
+// 	for n := 0; n < b.N; n++ {
+// 		jmespath.Search(query, getBenchInput)
+// 	}
+// }
 
-func BenchmarkGetJMESPathFlatten(b *testing.B) {
-	b.ReportAllocs()
+// func BenchmarkGetJMESPathFlatten(b *testing.B) {
+// 	b.ReportAllocs()
 
-	query := "items[].tags|[]"
+// 	query := "items[].tags|[]"
 
-	out, err := jmespath.Search(query, getBenchInput)
-	require.NoError(b, err)
-	require.Equal(b, []any{"one", "two", "three", "four", "five", "six"}, out)
+// 	out, err := jmespath.Search(query, getBenchInput)
+// 	require.NoError(b, err)
+// 	require.Equal(b, []any{"one", "two", "three", "four", "five", "six"}, out)
 
-	for n := 0; n < b.N; n++ {
-		GetPath(query, getBenchInput, GetOptions{})
-	}
-}
+// 	for n := 0; n < b.N; n++ {
+// 		GetPath(query, getBenchInput, GetOptions{})
+// 	}
+// }
 
 func BenchmarkGetPathSimple(b *testing.B) {
 	b.ReportAllocs()

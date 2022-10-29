@@ -92,6 +92,72 @@ go get -u github.com/danielgtaylor/shorthand/cmd/j
 
 Also feel free to use this tool to generate structured data for input to other commands.
 
+Here is a diagram overview of the language syntax, which is similar to [JSON's syntax](https://www.json.org/json-en.html) but adds a few things:
+
+<!--
+https://tabatkins.github.io/railroad-diagrams/generator.html
+
+Diagram(
+    Choice(0,
+      Sequence('//', NonTerminal('comment')),
+      Sequence(
+        '{',
+        OneOrMore(
+          Sequence(
+            OneOrMore(Sequence(NonTerminal('string'), Optional(Sequence('[', Optional('^'), ZeroOrMore('0-9'), ']'))), '.'),
+            Choice(0,
+              Sequence(':', NonTerminal('value')),
+              Sequence('^', NonTerminal('query')),
+              NonTerminal('object'),
+            ),
+          ),
+          Choice(0, ',', '\\n'),
+        ),
+        '}'
+      ),
+      Sequence(
+        '[',
+        OneOrMore(NonTerminal('value'), Choice(0, ',', '\\n')),
+        ']'
+      ),
+      'undefined',
+      'null',
+      'true',
+      'false',
+      NonTerminal('integer'),
+      NonTerminal('float'),
+      Stack(
+        Sequence(
+          NonTerminal('YYYY'),
+          '-',
+          NonTerminal('MM'),
+          '-',
+          NonTerminal('DD'),
+        ),
+          Sequence(
+          'T',
+          NonTerminal('hh'),
+          ':',
+          NonTerminal('mm'),
+          ':',
+          NonTerminal('ss'),
+          NonTerminal('zone')
+        ),
+      ),
+      Sequence('%', NonTerminal('base64')),
+      Sequence('@', NonTerminal('filename')),
+      NonTerminal('string'),
+    ),
+)
+-->
+
+![shorthand-syntax](https://user-images.githubusercontent.com/106826/198850895-a1a8481a-2c63-484c-9bf2-ce472effa8c3.svg)
+
+Note:
+
+- `string` can be quoted (with `"`) or unquoted.
+- The `query` syntax in the diagram above is described below in the [Querying](#querying) section.
+
 ### Keys & Values
 
 At its most basic, a structure is built out of key & value pairs. They are separated by commas:
@@ -113,7 +179,7 @@ Shorthand supports the standard JSON types, but adds some of its own as well to 
 | `null`    | JSON `null`                                                      |
 | `boolean` | Either `true` or `false`                                         |
 | `number`  | JSON number, e.g. `1`, `2.5`, or `1.4e5`                         |
-| `string`  | Quoted or unquoted strings, e.g. `"hello"`                       |
+| `string`  | Quoted or unquoted strings, e.g. `hello` or `"hello"`            |
 | `bytes`   | `%`-prefixed, unquoted, base64-encoded binary data, e.g. `%wg==` |
 | `time`    | Date/time in ISO8601, e.g. `2022-01-01T12:00:00Z`                |
 | `array`   | JSON array, e.g. `[1, 2, 3]`                                     |
@@ -318,7 +384,7 @@ $ j <data.json 'id ^ name, tags[0] ^ tags[-1]'
 
 ### Querying
 
-A data query language is included, which allows you to query, filter, and select fields to return. This functionality is used by the patch move operations described above and is similar to, but simpler than, tools like:
+A data query language is included, which allows you to query, filter, and select fields to return. This functionality is used by the patch move operations described above and is similar to tools like:
 
 - [jq](https://stedolan.github.io/jq/)
 - [JMESPath](http://jmespath.org/)
@@ -327,12 +393,64 @@ A data query language is included, which allows you to query, filter, and select
 The query language supports:
 
 - Paths for objects & arrays `foo.items.name`
-- Array indexing & slicing `foo.items[1].name`
+- Wildcards for unknown props `foo.*.name`
+- Array indexing & slicing `foo.items[1:2].name`
+  - Including negative indexes `foo.items[-1].name`
 - Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
 - Object property selection `foo.{created, names: items.name}`
 - Recursive search `foo..name`
 - Stopping processing with a pipe `|`
 - Flattening nested arrays `[]`
+
+The query syntax is recursive and looks like this:
+
+<!--
+Diagram(
+  Stack(
+    OneOrMore(Sequence(
+      Choice(1,
+        Skip(),
+        NonTerminal('string'),
+        '*',
+      ),
+      Optional(
+        Sequence(
+          '[',
+          Choice(1,
+            Skip(),
+            NonTerminal('number'),
+            NonTerminal('slice'),
+            NonTerminal('filter')
+          ),
+          ']',
+        )
+      ),
+      Optional('|'),
+    ), Choice(0, '.', '..')),
+    Optional(
+      Sequence(
+        '.',
+        '{',
+        OneOrMore(
+          Sequence(
+            NonTerminal('string'),
+            Optional(
+              Sequence(':', NonTerminal('query')),
+              'skip'
+            ),
+          ),
+          ','
+        ),
+        '}',
+      ), 'skip',
+    ),
+  )
+)
+-->
+
+![shorthand-query-syntax](https://user-images.githubusercontent.com/106826/198693468-fadf8d48-8223-4dd9-a2cb-a1651e342fc5.svg)
+
+The `filter` syntax is described in the documentation for [mexpr](https://github.com/danielgtaylor/mexpr).
 
 Examples:
 
@@ -371,7 +489,7 @@ $ j <data.json -q 'users[friends contains b].{id, age}'
 
 ## Library Usage
 
-Aside from `Marshal` and `Unmarshal` functions, the `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments:
+Aside from `Marshal` and `Unmarshal` functions, the `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments for CLI applications:
 
 ```go
 package main
@@ -412,7 +530,7 @@ Shorthand v2 has been completely rewritten from the ground up and is over 20 tim
 
 ```sh
 # Comparing new (V2) vs. old (V1)
-BenchmarkShorthandV2-12     309817    3825 ns/op    1888 B/op    54 allocs/op
+BenchmarkShorthandV2-12     309817    2482 ns/op    1888 B/op    54 allocs/op
 BenchmarkShorthandV1-12      14670   83901 ns/op   36436 B/op   745 allocs/op
 
 # Comparing JSON & YAML to Shorthand
@@ -451,11 +569,28 @@ foo.bar{id: 1, tags: [{value: a}, {value: b}]}
   [OpSet, "foo.bar.tags[0].value", "a"],
   [OpSet, "foo.bar.tags[1].value", "b"]
 ]
+
+# Existing
+{"foo": {"baz": 2}}
+
+# Applied Output JSON
+{
+  "foo": {
+    "bar": {
+      "id": 1,
+      "tags: [
+        {"value": "a"},
+        {"value": "b"}
+      ]
+    },
+    "baz": 2
+  }
+}
 ```
 
 This simplifies the code to apply changes, as it can process each operation independently.
 
-The file `get.go` provides an implementation of path parsing. It also utilizes [danielgtaylor/mexpr](https://github.com/danielgtaylor/mexpr), a top-down operator precedence (Pratt) parser for simple filter expressions.
+The file `get.go` provides an implementation of query parsing. It also utilizes [danielgtaylor/mexpr](https://github.com/danielgtaylor/mexpr), a top-down operator precedence (Pratt) parser for simple filter expressions.
 
 No special steps are necessary to test local changes to the grammar. You can just run the included `j` utility to test:
 

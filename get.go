@@ -1,11 +1,13 @@
 package shorthand
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/danielgtaylor/mexpr"
+	"golang.org/x/exp/maps"
 )
 
 type GetOptions struct {
@@ -237,7 +239,7 @@ func (d *Document) parseGetProp() (any, Error) {
 	}
 
 	if !d.options.ForceStringKeys && !quoted {
-		if v, ok := coerceValue(key); ok {
+		if v, ok := coerceValue(key, false); ok {
 			return v, nil
 		}
 	}
@@ -257,10 +259,38 @@ func (d *Document) getProp(input any) (any, bool, Error) {
 
 	if m, ok := input.(map[string]any); ok {
 		if s, ok := key.(string); ok {
+			if key == "*" {
+				// Special case: wildcard property
+				keys := maps.Keys(m)
+				sort.Strings(keys)
+				values := make([]any, len(m))
+				for i, k := range keys {
+					values[i] = m[k]
+				}
+				return values, true, nil
+			}
+
 			v, ok := m[s]
 			return v, ok, nil
 		}
 	} else if m, ok := input.(map[any]any); ok {
+		if s, ok := key.(string); ok && s == "*" {
+			// Special case: wildcard property
+			keys := make([]any, 0, len(m))
+			for k := range m {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool {
+				// This order is not perfect, but crucially it *is* stable.
+				return fmt.Sprintf("%v", keys[i]) < fmt.Sprintf("%v", keys[j])
+			})
+			values := make([]any, len(m))
+			for i, k := range keys {
+				values[i] = m[k]
+			}
+			return values, true, nil
+		}
+
 		v, ok := m[key]
 		return v, ok, nil
 	} else {

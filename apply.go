@@ -181,7 +181,7 @@ func (d *Document) applyPathPart(input any, op Operation) (any, Error) {
 			}
 
 			if !d.options.ForceStringKeys && !quoted {
-				if tmp, ok := coerceValue(keystr); ok {
+				if tmp, ok := coerceValue(keystr, d.options.ForceFloat64Numbers); ok {
 					key = tmp
 				}
 			}

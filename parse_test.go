@@ -94,11 +94,34 @@ var parseExamples = []struct {
 	},
 	{
 		Name: "Multiline optional commas",
-		Input: `{
+		Input: `
+		{
 			a: 1
 			b{
 				c: 2
 			}
+		}`,
+		JSON: `[["a", 1], ["b.c", 2]]`,
+	},
+	{
+		Name: "Multiline trailing commas",
+		Input: `
+		{
+			a: 1,
+			b{
+				c: 2,
+			},
+		}`,
+		JSON: `[["a", 1], ["b.c", 2]]`,
+	},
+	{
+		Name: "Multiline with comments",
+		Input: `// Line comment
+		{
+			a: 1, // Trailing comment
+			b{ // Before properties
+				c: 2
+			} // After object
 		}`,
 		JSON: `[["a", 1], ["b.c", 2]]`,
 	},
@@ -199,7 +222,11 @@ func TestParser(t *testing.T) {
 			result := d.marshalOps()
 
 			if example.Error == "" {
-				require.NoError(t, err)
+				msg := ""
+				if err != nil {
+					msg = err.Pretty()
+				}
+				require.NoError(t, err, msg)
 			} else {
 				require.Error(t, err, "result is %v", d.Operations)
 				require.Contains(t, err.Error(), example.Error)

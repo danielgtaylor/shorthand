@@ -31,6 +31,10 @@ type ParseOptions struct {
 	// to efficiently create a result that will `json.Marshal(...)` safely.
 	ForceStringKeys bool
 
+	// ForceFloat64Numbers forces all numbers to use `float64` rather than
+	// differentiating between `float64` and `int64`.
+	ForceFloat64Numbers bool
+
 	// DebugLogger sets a function to be used for printing out debug information.
 	DebugLogger func(format string, a ...interface{})
 }
@@ -87,8 +91,9 @@ func (d *Document) Parse(input string) Error {
 		return err
 	}
 	d.skipWhitespace()
+	d.skipComments(d.peek())
 	if !d.expect(-1) {
-		return d.error(1, "Expected EOF but found additional input")
+		return d.error(1, "Expected EOF but found additional input: "+string(d.expression[d.pos]))
 	}
 	return nil
 }

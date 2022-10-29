@@ -25,6 +25,11 @@ var applyExamples = []struct {
 		JSON:  `true`,
 	},
 	{
+		Name:  "Negative",
+		Input: "-1",
+		JSON:  `-1`,
+	},
+	{
 		Name:  "Coercion",
 		Input: "{n: null, b: true, i: 1, f: 1.0, dt: 2020-01-01T12:00:00Z, s: hello}",
 		Go: map[string]interface{}{
@@ -148,6 +153,13 @@ var applyExamples = []struct {
 		Name:  "JSON string escapes",
 		Input: `{"foo\u000Abar": "a\nb", "baz\ta": "a\nb"}`,
 		JSON:  `{"foo\nbar": "a\nb", "baz\ta": "a\nb"}`,
+	},
+	{
+		Name:  "JSON emoji",
+		Input: `{"a": "\ud83d\ude08"}`,
+		Go: map[string]any{
+			"a": "😈",
+		},
 	},
 	{
 		Name:  "Top-level array",

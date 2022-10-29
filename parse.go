@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
@@ -41,13 +42,13 @@ func canCoerce(value string) bool {
 		return true
 	} else if len(value) >= 10 && value[0] >= '0' && value[0] <= '9' && value[3] >= '0' && value[3] <= '9' && value[4] == '-' && value[7] == '-' {
 		return true
-	} else if len(value) > 0 && value[0] >= '0' && value[0] <= '9' {
+	} else if len(value) > 0 && ((value[0] >= '0' && value[0] <= '9') || value[0] == '-' || value[0] == '+' || value[0] == '.') {
 		return true
 	}
 	return false
 }
 
-func coerceValue(value string) (any, bool) {
+func coerceValue(value string, forceFloat bool) (any, bool) {
 	if value == "null" {
 		return nil, true
 	} else if value == "true" {
@@ -59,7 +60,7 @@ func coerceValue(value string) (any, bool) {
 		if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
 			return t, true
 		}
-	} else if len(value) > 0 && value[0] >= '0' && value[0] <= '9' {
+	} else if len(value) > 0 && ((value[0] >= '0' && value[0] <= '9') || value[0] == '-' || value[0] == '+' || value[0] == '.') {
 		// This looks like a number.
 		isFloat := false
 		for _, r := range value {
@@ -68,7 +69,7 @@ func coerceValue(value string) (any, bool) {
 				break
 			}
 		}
-		if isFloat {
+		if isFloat || forceFloat {
 			if f, err := strconv.ParseFloat(value, 64); err == nil {
 				return f, true
 			}
@@ -109,8 +110,18 @@ func (d *Document) back() {
 
 // peek returns the next rune without moving the position forward.
 func (d *Document) peek() rune {
-	r := d.next()
-	d.back()
+	if d.pos >= uint(len(d.expression)) {
+		return -1
+	}
+
+	var r rune
+	if d.expression[d.pos] < utf8.RuneSelf {
+		// Optimization for a simple ASCII character
+		r = rune(d.expression[d.pos])
+	} else {
+		r, _ = utf8.DecodeRuneInString(d.expression[d.pos:])
+	}
+
 	return r
 }
 
@@ -141,6 +152,44 @@ func (d *Document) skipWhitespace() {
 	}
 }
 
+func (d *Document) skipComments(r rune) bool {
+	if r == '/' && d.peek() == '/' {
+		for {
+			r = d.next()
+			if r == -1 || r == '\n' {
+				break
+			}
+		}
+		d.skipWhitespace()
+		return true
+	}
+	return false
+}
+
+// getu4 decodes \uXXXX from the beginning of s, returning the hex value,
+// or it returns -1.
+// This is taken from the official Go JSON decoder.
+func getu4(s []byte) rune {
+	if len(s) < 6 || s[0] != '\\' || s[1] != 'u' {
+		return -1
+	}
+	var r rune
+	for _, c := range s[2:6] {
+		switch {
+		case '0' <= c && c <= '9':
+			c = c - '0'
+		case 'a' <= c && c <= 'f':
+			c = c - 'a' + 10
+		case 'A' <= c && c <= 'F':
+			c = c - 'A' + 10
+		default:
+			return -1
+		}
+		r = r*16 + rune(c)
+	}
+	return r
+}
+
 func (d *Document) parseEscape(quoted bool, includeEscape bool) bool {
 	peek := d.peek()
 	if !quoted {
@@ -168,14 +217,26 @@ func (d *Document) parseEscape(quoted bool, includeEscape bool) bool {
 		d.buf.WriteRune(replace)
 		return true
 	}
-	if peek == 'u' && len(d.expression) >= int(d.pos)+5 {
-		if s, err := strconv.Unquote(`"` + d.expression[d.pos-1:d.pos+5] + `"`); err == nil {
-			d.buf.WriteString(s)
-			d.next()
-			d.next()
-			d.next()
-			d.next()
-			d.next()
+	if (peek == 'u' || peek == 'U') && len(d.expression) >= int(d.pos)+5 {
+		r := getu4([]byte(d.expression[d.pos-1:]))
+		if r >= 0 {
+			b := make([]byte, 4)
+			d.pos += 5 // We already consumed the '\'
+			if utf16.IsSurrogate(r) {
+				// This is a two character UTF16 sequence as two '\uXXXX' pairs.
+				r2 := getu4([]byte(d.expression[d.pos:]))
+				if dec := utf16.DecodeRune(r, r2); dec != unicode.ReplacementChar {
+					d.pos += 6
+					w := utf8.EncodeRune(b, dec)
+					d.buf.Write(b[:w])
+					return true
+				}
+				// Invalid surrogate!
+				r = unicode.ReplacementChar
+			}
+			// Otherwise: this is a normal single '\uXXXX' encoded character.
+			w := utf8.EncodeRune(b, r)
+			d.buf.Write(b[:w])
 			return true
 		}
 	}
@@ -280,6 +341,10 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 			}
 		}
 
+		if d.skipComments(r) {
+			continue
+		}
+
 		d.buf.WriteRune(r)
 	}
 
@@ -322,6 +387,7 @@ func (d *Document) parseObject(path string) Error {
 
 		if r == ',' {
 			d.next()
+			continue
 		}
 
 		prop, err := d.parseProp(path, false)
@@ -372,6 +438,11 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 	for {
 		r := d.next()
 
+		if d.skipComments(r) {
+			canSlice = false
+			continue
+		}
+
 		if r == '\\' {
 			if d.parseEscape(false, false) {
 				canSlice = false
@@ -395,6 +466,8 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 				if !d.expect('}') {
 					return d.error(d.pos-start, "Expected '}' but found %s", runeStr(r))
 				}
+				d.skipWhitespace()
+				d.skipComments(d.peek())
 				break
 			} else if r == '[' {
 				if d.options.DebugLogger != nil {
@@ -553,7 +626,7 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 						break
 					}
 
-					if coerced, ok := coerceValue(value); ok {
+					if coerced, ok := coerceValue(value, d.options.ForceFloat64Numbers); ok {
 						if d.options.DebugLogger != nil {
 							d.options.DebugLogger("Parse value: %v", coerced)
 						}
