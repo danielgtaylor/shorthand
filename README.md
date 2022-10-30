@@ -14,9 +14,10 @@ Shorthand is a superset and friendlier variant of JSON designed with several use
 The shorthand syntax supports the following features, described in more detail with examples below:
 
 - Superset of JSON (valid JSON is valid shorthand)
-- Optional commas, quotes, and sometimes colons
+  - Optional commas, quotes, and sometimes colons
+  - Support for comments & trailing commas
 - Automatic type coercion
-  - Support for bytes, dates, and maps with non-string keys
+  - Support for bytes, datetimes, and maps with non-string keys
 - Nested object & array creation
 - Loading values from files
 - Editing existing data
@@ -33,6 +34,7 @@ foo.bar[]{baz: 1, hello: world}
 
 ```
 {
+  // This is a comment
   foo.bar[]{
     baz: 1
     hello: world
