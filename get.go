@@ -361,7 +361,8 @@ func (d *Document) findPropRecursive(key, input any) ([]any, Error) {
 	return results, nil
 }
 
-func (d *Document) flatten(input any) (any, Error) {
+// flatten nested arrays one level. Returns `nil` if the input is not an array.
+func (d *Document) flatten(input any) any {
 	if d.options.DebugLogger != nil {
 		d.options.DebugLogger("Flattening %v", input)
 	}
@@ -376,9 +377,9 @@ func (d *Document) flatten(input any) (any, Error) {
 
 			out = append(out, item.([]any)...)
 		}
-		return out, nil
+		return out
 	}
-	return nil, nil
+	return nil
 }
 
 func (d *Document) getPath(input any) (any, bool, Error) {
@@ -396,10 +397,7 @@ outer:
 				// Special case: flatten one level
 				// [[1, 2], 3, [[4]]] => [1, 2, 3, [4]]
 				d.next()
-				input, err = d.flatten(input)
-				if err != nil {
-					return nil, false, err
-				}
+				input = d.flatten(input)
 				found = true
 				continue
 			}
@@ -481,11 +479,9 @@ func (d *Document) getFields(input any) (any, Error) {
 	for {
 		r = d.next()
 		if r == '"' {
-			d.buf.WriteRune('"')
 			if err := d.parseQuoted(true); err != nil {
 				return nil, err
 			}
-			d.buf.WriteRune('"')
 			continue
 		}
 		if r == '\\' {

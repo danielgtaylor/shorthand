@@ -24,6 +24,12 @@ var getExamples = []struct {
 		Go:    "value",
 	},
 	{
+		Name:  "Field escape",
+		Input: `{"a": "value"}`,
+		Query: `\u0061`,
+		Go:    "value",
+	},
+	{
 		Name: "Field non string",
 		Input: map[any]any{
 			1: true,
@@ -36,6 +42,18 @@ var getExamples = []struct {
 		Input: `{"f1": {"f2": {"f3": true}}}`,
 		Query: `f1.f2.f3`,
 		Go:    true,
+	},
+	{
+		Name:  "Nested fields with arrays",
+		Input: `{"f1": [{"f2": {"f3": true}}, {"missing": true}]}`,
+		Query: `f1.f2.f3`,
+		Go:    []any{true},
+	},
+	{
+		Name:  "Nested fields empty array",
+		Input: `{"f1": []}`,
+		Query: `f1.f2.f3`,
+		Go:    nil,
 	},
 	{
 		Name:  "Wildcard fields",
@@ -65,6 +83,21 @@ var getExamples = []struct {
 		Go:    []any{1.0, 2.0, 3.0},
 	},
 	{
+		Name: "Recursive fields any map",
+		Input: map[any]any{
+			"a": []any{
+				map[any]any{
+					"id": 1,
+				},
+				map[any]any{
+					"id": 2,
+				},
+			},
+		},
+		Query: `..id`,
+		Go:    []any{1, 2},
+	},
+	{
 		Name:  "Array index",
 		Input: `{"field": [1, 2, 3]}`,
 		Query: `field[0]`,
@@ -83,6 +116,48 @@ var getExamples = []struct {
 		Go:    1.0,
 	},
 	{
+		Name:  "Array slice",
+		Input: `{"field": [0, 1, 2]}`,
+		Query: `field[0:1]`,
+		Go:    []any{0.0, 1.0},
+	},
+	{
+		Name:  "Array slice optional start",
+		Input: `{"field": [0, 1, 2]}`,
+		Query: `field[:1]`,
+		Go:    []any{0.0, 1.0},
+	},
+	{
+		Name:  "Array slice optional end",
+		Input: `{"field": [0, 1, 2]}`,
+		Query: `field[1:]`,
+		Go:    []any{1.0, 2.0},
+	},
+	{
+		Name:  "Index string",
+		Input: `{"field": "hello"}`,
+		Query: `field[1]`,
+		Go:    "e",
+	},
+	{
+		Name:  "Slice string",
+		Input: `{"field": "hello"}`,
+		Query: `field[1:]`,
+		Go:    "ello",
+	},
+	{
+		Name:  "Index bytes",
+		Input: map[string]any{"field": []byte("hello")},
+		Query: `field[1]`,
+		Go:    uint8('e'),
+	},
+	{
+		Name:  "Slice bytes",
+		Input: map[string]any{"field": []byte("hello")},
+		Query: `field[1:]`,
+		Go:    []byte("ello"),
+	},
+	{
 		Name:  "Array item fields",
 		Input: `{"items": [{"f1": {"f2": 1}}, {"f1": {"f2": 2}}, {"other": 3}]}`,
 		Query: `items.f1.f2`,
@@ -98,6 +173,12 @@ var getExamples = []struct {
 		Name:  "Array item scalar filtering",
 		Input: `{"items": ["a", "b", "c"]}`,
 		Query: `items[@ startsWith a]`,
+		Go:    []any{"a"},
+	},
+	{
+		Name:  "Array item scalar filtering with ?",
+		Input: `{"items": ["a", "b", "c"]}`,
+		Query: `items[?@ startsWith a]`,
 		Go:    []any{"a"},
 	},
 	{
@@ -119,10 +200,37 @@ var getExamples = []struct {
 		Go:    "a",
 	},
 	{
+		Name:  "Array filtering escape",
+		Input: `{"items": ["a", "b", "c"]}`,
+		Query: `items[@ startsWith \u0061]`,
+		Go:    []any{"a"},
+	},
+	{
 		Name:  "Field selection",
 		Input: `{"link": {"id": 1, "verified": true, "tags": ["a", "b"]}}`,
 		Query: `link.{id, tags}`,
 		Go:    map[string]any{"id": 1.0, "tags": []any{"a", "b"}},
+	},
+	{
+		Name:  "Field selection quoted",
+		Input: `{"link": {"id": 1, "verified": true, "tags ": ["a", "b"]}}`,
+		Query: `link.{"id", t: "tags "}`,
+		Go:    map[string]any{"id": 1.0, "t": []any{"a", "b"}},
+	},
+	{
+		Name:  "Field selection escaped",
+		Input: `{"link": {"a": true}}`,
+		Query: `link.{\u0061}`,
+		Go:    map[string]any{"a": true},
+	},
+	{
+		Name: "Field selection map any",
+		Input: map[any]any{
+			"foo": "bar",
+			"baz": true,
+		},
+		Query: `{foo}`,
+		Go:    map[string]any{"foo": "bar"},
 	},
 	{
 		Name:  "Array field selection",
@@ -147,6 +255,42 @@ var getExamples = []struct {
 		Input: `{"foo": "bar", "link": {"id": 1, "verified": true, "tags": ["a", "b"]}}`,
 		Query: `{foo, tags: link.tags[@ startsWith a]|[0], id: link.id}`,
 		Go:    map[string]any{"foo": "bar", "id": 1.0, "tags": "a"},
+	},
+	{
+		Name:  "Unclosed filter",
+		Input: `{}`,
+		Query: `foo[`,
+		Error: "expected ']'",
+	},
+	{
+		Name:  "Unclosed filter quote",
+		Input: `{}`,
+		Query: `foo["`,
+		Error: "Expected quote but found EOF",
+	},
+	{
+		Name:  "Recursive prop unclosed quote",
+		Input: `{"foo": "bar"}`,
+		Query: `foo.."`,
+		Error: "Expected quote but found EOF",
+	},
+	{
+		Name:  "Filter expr error",
+		Input: `{}`,
+		Query: `foo[1/0]"`,
+		Error: "cannot divide by zero",
+	},
+	{
+		Name:  "Field select non-map",
+		Input: `[1, 2, 3]`,
+		Query: `{id}`,
+		Error: "field selection requires a map",
+	},
+	{
+		Name:  "Field select unclosed",
+		Input: `[1, 2, 3]`,
+		Query: `{id`,
+		Error: "field selection requires a map",
 	},
 }
 
