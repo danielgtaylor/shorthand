@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/danielgtaylor/shorthand"
+	"github.com/danielgtaylor/shorthand/v2"
 	"github.com/fxamacker/cbor/v2"
 	toml "github.com/pelletier/go-toml"
 	"github.com/spf13/cobra"

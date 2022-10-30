@@ -496,7 +496,7 @@ package main
 
 import (
   "fmt"
-  "github.com/danielgtaylor/shorthand"
+  "github.com/danielgtaylor/shorthand/v2"
 )
 
 func main() {
