@@ -29,6 +29,8 @@ var JSONReplacements = map[rune]rune{
 func runeStr(r rune) string {
 	if r == -1 {
 		return "EOF"
+	} else if r == '\n' {
+		return "\\n"
 	}
 	return string(r)
 }
@@ -312,7 +314,7 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 			continue
 		}
 
-		if r == -1 || r == ':' || r == '{' || r == '}' || r == '^' || (commaStop && r == ',') {
+		if r == -1 || r == ':' || r == '{' || r == '}' || r == '^' || r == ']' || (commaStop && r == ',') {
 			d.back()
 			break
 		}
@@ -395,7 +397,11 @@ func (d *Document) parseObject(path string) Error {
 			return err
 		}
 		r = d.next()
-		if r == '{' {
+		if r == ']' {
+			// Common error: incorrect order of closing backets/braces.
+			d.back()
+			return d.error(1, "Expected property or '}' while parsing object but got ']'")
+		} else if r == '{' {
 			// a{b: 1} is equivalent to a: {b: 1}, so we just send this to be parsed
 			// as a value.
 			d.back()
@@ -493,7 +499,9 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 					if idx > 0 && strings.Contains(path, "[]") {
 						path = strings.ReplaceAll(path, "[]", "[-1]")
 					}
-					d.parseValue(path+"["+strconv.Itoa(idx)+"]", true, true)
+					if err := d.parseValue(path+"["+strconv.Itoa(idx)+"]", true, true); err != nil {
+						return err
+					}
 
 					d.skipWhitespace()
 					peek := d.peek()
