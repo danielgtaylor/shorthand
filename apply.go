@@ -171,7 +171,7 @@ func (d *Document) applyPathPart(input any, op Operation) (any, Error) {
 			var key any = keystr
 			d.buf.Reset()
 
-			if key == "" {
+			if key == "" && !quoted {
 				// Special case: raw value
 				if r == '[' {
 					// This raw value is an array.

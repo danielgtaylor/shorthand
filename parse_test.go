@@ -53,6 +53,11 @@ var parseExamples = []struct {
 		JSON:  `[["", {}]]`,
 	},
 	{
+		Name:  "Empty key",
+		Input: `{"": 0}`,
+		JSON:  `[["\"\"", 0]]`,
+	},
+	{
 		Name:  "UTF-8 characters",
 		Input: "ä",
 		JSON:  `[["", "ä"]]`,

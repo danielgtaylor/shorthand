@@ -323,7 +323,7 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 			}
 			prop := d.buf.String()
 
-			if canCoerce(prop) {
+			if canCoerce(prop) || prop == "" {
 				// This could be coerced into another type, so let's keep it wrapped
 				// in quotes to ensure it is treated properly.
 				prop = `"` + prop + `"`

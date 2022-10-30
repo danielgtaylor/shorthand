@@ -43,6 +43,12 @@ var applyExamples = []struct {
 		JSON: `{"n": null, "b": true, "i": 1, "f": 1.0, "dt": "2020-01-01T12:00:00Z", "s": "hello"}`,
 	},
 	{
+		Name:  "Empty property name",
+		Input: `{"": 0}`,
+		Go:    map[string]any{"": 0},
+		JSON:  `{"": 0}`,
+	},
+	{
 		Name:  "Property nested",
 		Input: "{foo.bar.baz: hello}",
 		JSON:  `{"foo": {"bar": {"baz": "hello"}}}`,
