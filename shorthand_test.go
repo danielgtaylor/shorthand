@@ -2,246 +2,229 @@ package shorthand
 
 import (
 	"encoding/json"
+	"io"
+	"io/fs"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func parsed(input string, existing ...map[string]interface{}) string {
-	result, err := ParseAndBuild("stdin", input, existing...)
-	if err != nil {
-		panic(err)
-	}
-
-	j, _ := json.Marshal(result)
-	return string(j)
+var getInputExamples = []struct {
+	Name   string
+	Mode   fs.FileMode
+	File   io.Reader
+	Input  string
+	JSON   string
+	Output []byte
+}{
+	{
+		Name:  "No file",
+		Mode:  fs.ModeCharDevice,
+		Input: "foo[]: 2, bar.another: false, existing: null, existing[]: 1",
+		JSON: `{
+			"foo": [2],
+			"bar": {
+				"another": false
+			},
+			"existing": [1]
+		}`,
+	},
+	{
+		Name:   "Raw file",
+		File:   strings.NewReader("a text file"),
+		Output: []byte("a text file"),
+	},
+	{
+		Name:   "Structured file no args",
+		File:   strings.NewReader(`{"foo":"bar"}`),
+		Output: []byte(`{"foo":"bar"}`),
+	},
+	{
+		Name: "JSON edit",
+		File: strings.NewReader(`{
+			"foo": [1],
+			"bar": {
+				"baz": true
+			},
+			"existing": [1, 2, 3]
+		}`),
+		Input: "foo[]: 2, bar.another: false, existing: null, existing[]: 1",
+		JSON: `{
+			"foo": [1, 2],
+			"bar": {
+				"another": false,
+				"baz": true
+			},
+			"existing": [1]
+		}`,
+	},
 }
 
 func TestGetInput(t *testing.T) {
-	file := strings.NewReader(`{
-		"foo": [1],
-		"bar": {
-			"baz": true
+	for _, example := range getInputExamples {
+		t.Run(example.Name, func(t *testing.T) {
+			input := []string{}
+			if example.Input != "" {
+				input = append(input, example.Input)
+			}
+			result, isStruct, err := getInput(example.Mode, example.File, input, ParseOptions{
+				EnableObjectDetection: true,
+			})
+			msg := ""
+			if e, ok := err.(Error); ok {
+				msg = e.Pretty()
+			}
+			require.NoError(t, err, msg)
+
+			if example.JSON != "" {
+				if !isStruct {
+					t.Fatal("input not recognized as structured data")
+				}
+				j, _ := json.Marshal(result)
+				assert.JSONEq(t, example.JSON, string(j))
+			}
+
+			if example.Output != nil {
+				assert.Equal(t, example.Output, result)
+			}
+		})
+	}
+}
+
+var marshalExamples = []struct {
+	Name   string
+	Input  any
+	Output string
+}{
+	{
+		Name:   "Simple",
+		Input:  true,
+		Output: "true",
+	},
+	{
+		Name: "Simple object",
+		Input: map[string]any{
+			"foo": "bar",
 		},
-		"existing": [1, 2, 3]
-	}`)
-
-	result, err := getInput(0, file, []string{"foo[]: 2, bar.another: false, existing: null, existing[]: 1"})
-	assert.NoError(t, err)
-
-	j, _ := json.Marshal(result)
-	assert.JSONEq(t, `{
-		"foo": [1, 2],
-		"bar": {
-			"another": false,
-			"baz": true
+		Output: "foo: bar",
+	},
+	{
+		Name: "Multi key",
+		Input: map[string]any{
+			"foo":   "bar",
+			"hello": "world",
+			"num":   1,
+			"empty": nil,
+			"bool":  false,
 		},
-		"existing": [1]
-	}`, string(j))
-}
-
-func TestParseCoerce(t *testing.T) {
-	result := parsed(`n: null, b: true, i: 1, f: 1.0, s: hello`)
-	assert.JSONEq(t, `{"n": null, "b": true, "i": 1, "f": 1.0, "s": "hello"}`, result)
-}
-
-func TestParseWhitespace(t *testing.T) {
-	assert.JSONEq(t, `{"foo": "hello", "bar": "world"}`, parsed(`foo :    hello   ,    bar:world  `))
-}
-
-func TestParseIP(t *testing.T) {
-	assert.JSONEq(t, `{"foo": "1.2.3.4"}`, parsed(`foo: 1.2.3.4`))
-}
-
-func TestParseTrailingSpace(t *testing.T) {
-	assert.JSONEq(t, `{"foo": {"a": 1}}`, parsed(`foo{a: 1 }`))
-}
-
-func TestParseForceString(t *testing.T) {
-	assert.JSONEq(t, `{"foo": "1"}`, parsed(`foo:~ 1`))
-}
-
-func TestParseMultipleProperties(t *testing.T) {
-	assert.JSONEq(t, `{"foo": {"bar": {"baz": 1}}}`, parsed(`foo.bar.baz: 1`))
-}
-
-func TestParseContext(t *testing.T) {
-	result := parsed(`foo.bar: 1, .baz: 2, qux: 3`)
-	assert.JSONEq(t, `{"foo": {"bar": 1, "baz": 2}, "qux": 3}`, result)
-}
-
-func TestParsePropertyGrouping(t *testing.T) {
-	assert.JSONEq(t, `{"foo": {"bar": 1, "baz": 2}}`, parsed(`foo{bar: 1, baz: 2}`))
-}
-
-func TestParserShortList(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [1, 2, 3]}`, parsed(`foo: 1, 2, 3`))
-}
-
-func TestParserShortStringList(t *testing.T) {
-	assert.JSONEq(t, `{"foo": ["1", "2", "3"]}`, parsed(`foo:~ 1, 2, 3`))
-}
-
-func TestParserListOfList(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [[null, [1]]]}`, parsed(`foo[][1][]: 1`))
-}
-
-func TestParserAppendList(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [1, 2, 3]}`, parsed(`foo[]: 1, []: 2, []: 3`))
-}
-
-func TestParserAppendNestedList(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [[[[2, 3]]]], "bar": [false]}`, parsed(`foo[][]: 1, [0][]: 2, 3, bar[]: true, [0]: false`))
-}
-
-func TestParserListIndex(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [true, null, null, "three", null, "five"]}`,
-		parsed(`foo[3]: three, foo[5]: five, foo[0]: true`))
-}
-
-func TestParserListIndexNested(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [null, null, null, [null, ["three"], true]]}`,
-		parsed(`foo[3][1][]: three, foo[3][2]: true`))
-}
-
-func TestParserListIndexObject(t *testing.T) {
-	result := parsed(`foo[0].bar: 1, foo[0].baz: 2`)
-	assert.JSONEq(t, `{"foo": [{"bar": 1, "baz": 2}]}`, result)
-}
-
-func TestParserAppendBackRef(t *testing.T) {
-	assert.JSONEq(t, `{"foo": [1, 3], "bar": 2}`, parsed(`foo[]: 1, bar: 2, []: 3`))
-}
-
-func TestParserListObjects(t *testing.T) {
-	result := parsed(`foo[].id: 1, .count: 1, [].id: 2, .count: 2`)
-	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
-}
-
-func TestParserListInlineObjects(t *testing.T) {
-	result := parsed(`foo[]{id: 1, count: 1}, []{id: 2, count: 2}`)
-	assert.JSONEq(t, `{"foo": [{"id": 1, "count": 1}, {"id": 2, "count": 2}]}`, result)
-}
-
-func TestParserNonFile(t *testing.T) {
-	assert.JSONEq(t, `{"foo": "@user"}`, parsed(`foo:~ @user`))
-}
-
-func TestParserFileStructured(t *testing.T) {
-	result := parsed(`foo: @testdata/hello.json`)
-	assert.JSONEq(t, `{"foo": {"hello": "world"}}`, result)
-}
-
-func TestParserFileForceString(t *testing.T) {
-	result := parsed(`foo: @~testdata/hello.json`)
-	assert.JSONEq(t, `{"foo": "{\n  \"hello\": \"world\"\n}\n"}`, result)
-}
-
-func TestExistingInput(t *testing.T) {
-	result := parsed(`foo[]: 3, foo[]: 4, bar[0][]: 2, baz.another: test`, map[string]interface{}{
-		"foo": []interface{}{1, 2},
-		"bar": []interface{}{[]interface{}{1}},
-		"baz": true,
-	})
-	assert.JSONEq(t, `{
-		"foo": [1, 2, 3, 4],
-		"bar": [[1, 2]],
-		"baz": {
-			"another": "test"
-		}
-	}`, result)
-}
-
-func TestGetShorthandSimple(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo": "bar",
-	})
-	assert.Equal(t, "foo: bar", result)
-}
-
-func TestGetShorthandMultiKey(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo":   "bar",
-		"hello": "world",
-		"num":   1,
-		"empty": nil,
-		"bool":  false,
-	})
-	assert.Equal(t, "bool: false, empty: null, foo: bar, hello: world, num: 1", result)
-}
-
-func TestGetShorthandNestedSimple(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo": map[string]interface{}{
-			"bar": 1,
+		Output: "bool: false, empty: null, foo: bar, hello: world, num: 1",
+	},
+	{
+		Name: "Nested simple",
+		Input: map[string]any{
+			"foo": map[string]any{
+				"bar": 1,
+			},
 		},
-	})
-	assert.Equal(t, "foo.bar: 1", result)
-}
-
-func TestGetShorthandNestedMultiKey(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo": map[string]interface{}{
-			"bar": 1,
-			"baz": 2,
+		Output: "foo.bar: 1",
+	},
+	{
+		Name: "Nested multi key",
+		Input: map[string]any{
+			"foo": map[string]any{
+				"bar": 1,
+				"baz": 2,
+			},
 		},
-	})
-	assert.Equal(t, "foo{bar: 1, baz: 2}", result)
-}
-
-func TestGetShorthandListSimple(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo": []interface{}{1, 2, 3},
-	})
-	assert.Equal(t, "foo: 1, 2, 3", result)
-}
-
-func TestGetShorthandListOfListScalar(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"foo": []interface{}{
-			[]interface{}{1, 2, 3},
+		Output: "foo{bar: 1, baz: 2}",
+	},
+	{
+		Name: "List of list of items",
+		Input: map[string]any{
+			"foo": []any{
+				[]any{1, 2, 3},
+			},
 		},
-	})
-	assert.Equal(t, "foo[]: 1, 2, 3", result)
-}
-
-func TestGetShorthandListOfObjects(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"tags": []interface{}{
-			map[string]interface{}{
-				"id": "tag1",
-				"count": map[string]interface{}{
-					"clicks": 15,
-					"sales":  3,
+		Output: "foo: [[1, 2, 3]]",
+	},
+	{
+		Name: "List of objects",
+		Input: map[string]interface{}{
+			"tags": []interface{}{
+				map[string]interface{}{
+					"id": "tag1",
+					"count": map[string]interface{}{
+						"clicks": 15,
+						"sales":  3,
+					},
+				},
+				map[string]interface{}{
+					"id": "tag2",
+					"count": map[string]interface{}{
+						"clicks": 7,
+						"sales":  4,
+					},
 				},
 			},
-			map[string]interface{}{
-				"id": "tag2",
-				"count": map[string]interface{}{
-					"clicks": 7,
-					"sales":  4,
+		},
+		Output: "tags: [{count{clicks: 15, sales: 3}, id: tag1}, {count{clicks: 7, sales: 4}, id: tag2}]",
+	},
+	{
+		Name: "Coerced",
+		Input: map[string]any{
+			"null": "null",
+			"bool": "true",
+			"num":  "1234",
+			"str":  "hello",
+		},
+		Output: `bool: "true", "null": "null", num: "1234", str: hello`,
+	},
+	{
+		Name: "File",
+		Input: map[string]any{
+			"multi": "I am\na multiline\n value.",
+			"long":  "I am a really long line of text that should probably get loaded from a file",
+		},
+		Output: "long: @file, multi: @file",
+	},
+}
+
+func TestMarshal(t *testing.T) {
+	for _, example := range marshalExamples {
+		t.Run(example.Name, func(t *testing.T) {
+			t.Logf("Input: %s", example.Input)
+			out := MarshalCLI(example.Input)
+			assert.Equal(t, example.Output, out)
+		})
+	}
+}
+
+func TestMarshalPretty(t *testing.T) {
+	result := MarshalPretty(map[string]any{
+		"foo": 1,
+		"bar": []any{
+			2, 3,
+		},
+		"baz": map[string]any{
+			"a": map[any]any{
+				"b": map[any]any{
+					"c": true,
+					"d": false,
 				},
 			},
 		},
 	})
-	assert.Equal(t, "tags[]{count{clicks: 15, sales: 3}, id: tag1}, []{count{clicks: 7, sales: 4}, id: tag2}", result)
-}
-
-func TestGetShorthandCoerced(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"null": "null",
-		"bool": "true",
-		"num":  "1234",
-		"str":  "hello",
-	})
-	assert.Equal(t, "bool:~ true, null:~ null, num:~ 1234, str: hello", result)
-}
-
-func TestGetShorthandFromFile(t *testing.T) {
-	result := Get(map[string]interface{}{
-		"multi": "I am\na multiline\n value.",
-		"long":  "I am a really long line of text that should probably get loaded from a file",
-	})
-	assert.Equal(t, "long: @file, multi: @file", result)
+	assert.Equal(t, `{
+  bar: [
+    2
+    3
+  ]
+  baz.a.b{
+    c: true
+    d: false
+  }
+  foo: 1
+}`, result)
 }

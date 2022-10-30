@@ -1,9 +1,0 @@
-language: go
-go:
-- '1.11'
-- '1.12'
-before_install:
-- go get -u github.com/shuLhan/go-bindata/...
-- go get golang.org/x/tools/cmd/goimports
-script:
-- ./test.sh
