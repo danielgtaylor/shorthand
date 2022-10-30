@@ -207,6 +207,19 @@ b	{
 		Input: `a: @invalid`,
 		Error: "Unable to read file",
 	},
+	{
+		Name: "Multiline error context",
+		// Note: missing closing `}` on third array item!
+		Input: `{
+			foo: true,
+			bar: [
+				a,
+				b,
+				{c: 1
+			]
+		}`,
+		Error: "{c: 1\n\t\t\t]\n...^",
+	},
 }
 
 func TestParser(t *testing.T) {
@@ -226,15 +239,16 @@ func TestParser(t *testing.T) {
 			err := d.Parse(example.Input)
 			result := d.marshalOps()
 
+			msg := ""
+			if err != nil {
+				msg = err.Pretty()
+			}
+
 			if example.Error == "" {
-				msg := ""
-				if err != nil {
-					msg = err.Pretty()
-				}
 				require.NoError(t, err, msg)
 			} else {
 				require.Error(t, err, "result is %v", d.Operations)
-				require.Contains(t, err.Error(), example.Error)
+				require.Contains(t, msg, example.Error)
 			}
 
 			if example.Go != nil {

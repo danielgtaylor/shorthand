@@ -1,6 +1,9 @@
 package shorthand
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Error represents an error at a specific location.
 type Error interface {
@@ -37,12 +40,47 @@ func (e *exprErr) Length() uint {
 }
 
 func (e *exprErr) Pretty() string {
-	// TODO: find previous line break if exists, also truncate to e.g. 80 chars, show one line only. Make it dead simple!
-	msg := e.Error() + "\n" + *e.source + "\n"
-	for i := uint(0); i < e.offset; i++ {
+	// Figure out which absolute line we are on.
+	lineNo := 1
+	for i := 0; i < int(e.offset); i++ {
+		if (*e.source)[i] == '\n' {
+			lineNo++
+		}
+	}
+
+	// Determine lines of context to show if multi-line.
+	start := int(e.offset)
+	if start > len(*e.source)-1 {
+		start = len(*e.source) - 1
+	}
+
+	lineStart := 0
+	lines := 0
+	for start > 0 {
+		if (*e.source)[start] == '\n' {
+			if lines == 0 {
+				lineStart = start + 1
+			}
+			lines++
+			if lines >= 4 {
+				start++
+				break
+			}
+		}
+		start--
+	}
+
+	end := int(e.offset)
+	for end < len(*e.source) && (*e.source)[end] != '\n' {
+		end++
+	}
+
+	// Generate a nice error message with context.
+	msg := e.Error() + " at line " + strconv.Itoa(lineNo) + " col " + strconv.Itoa(int(e.offset-uint(lineStart))+1) + "\n" + (*e.source)[start:end] + "\n"
+	for i := uint(lineStart); i < e.offset; i++ {
 		msg += "."
 	}
-	for i := uint(0); i < e.length; i++ {
+	for i := 0; i < end-int(e.offset); i++ {
 		msg += "^"
 	}
 	return msg
