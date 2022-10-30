@@ -1,6 +1,6 @@
 # Structured Data Shorthand Syntax
 
-[![Docs](https://godoc.org/github.com/danielgtaylor/shorthand?status.svg)](https://pkg.go.dev/github.com/danielgtaylor/shorthand?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/danielgtaylor/shorthand)](https://goreportcard.com/report/github.com/danielgtaylor/shorthand)
+[![Docs](https://godoc.org/github.com/danielgtaylor/shorthand?status.svg)](https://pkg.go.dev/github.com/danielgtaylor/shorthand?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/danielgtaylor/shorthand)](https://goreportcard.com/report/github.com/danielgtaylor/shorthand) [![CI](https://github.com/danielgtaylor/shorthand/workflows/CI/badge.svg?branch=main)](https://github.com/danielgtaylor/shorthand/actions?query=workflow%3ACI+branch%3Amain++) [![codecov](https://codecov.io/gh/danielgtaylor/shorthand/branch/main/graph/badge.svg)](https://codecov.io/gh/danielgtaylor/shorthand)
 
 Shorthand is a superset and friendlier variant of JSON designed with several use-cases in mind:
 
