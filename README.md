@@ -318,7 +318,7 @@ $ j 'twitter: "@user"'
 
 ### Patch (Partial Update)
 
-Partial updates are supported on existing data, which can be used to implement HTTP `PATCH`, templating, and other similar features. This feature combines the best of both:
+Partial updates are supported on existing data, which can be used to implement HTTP `PATCH`, templating, and other similar features. The suggested content type for HTTP `PATCH` is `application/shorthand-patch`. This feature combines the best of both:
 
 - [JSON Merge Patch](https://datatracker.ietf.org/doc/html/rfc7386)
 - [JSON Patch](https://www.rfc-editor.org/rfc/rfc6902)
@@ -330,6 +330,8 @@ Partial updates support:
 - Removing fields or array items via `undefined`
 - Moving/swapping fields or array items via `^`
   - The right hand side is a path to the value to swap. See Querying below for the path syntax.
+
+Note: When sending shorthand patches file loading via `@` should be disabled as the files will not exist on the server.
 
 Some examples:
 

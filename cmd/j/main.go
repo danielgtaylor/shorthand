@@ -24,7 +24,7 @@ func main() {
 	cmd := &cobra.Command{
 		Use:     fmt.Sprintf("%s [flags] key1: value1, key2: value2, ...", os.Args[0]),
 		Short:   "Generate shorthand structured data",
-		Example: fmt.Sprintf("%s foo.bar: 1, .baz: true", os.Args[0]),
+		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", os.Args[0]),
 		Run: func(cmd *cobra.Command, args []string) {
 			if len(args) == 0 && *query == "" {
 				fmt.Println("At least one arg or --query need to be passed")
@@ -37,7 +37,7 @@ func main() {
 				}
 				fmt.Printf("Input: %s\n", strings.Join(args, " "))
 			}
-			result, err := shorthand.GetInputWithOptions(args, shorthand.ParseOptions{
+			result, isStructured, err := shorthand.GetInput(args, shorthand.ParseOptions{
 				EnableFileInput:       true,
 				EnableObjectDetection: true,
 				ForceStringKeys:       *format == "json",
@@ -50,6 +50,10 @@ func main() {
 				} else {
 					panic(err)
 				}
+			}
+			if !isStructured {
+				fmt.Println("Input file could not be parsed as structured data")
+				os.Exit(1)
 			}
 
 			if *query != "" {

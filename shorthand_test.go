@@ -2,33 +2,95 @@ package shorthand
 
 import (
 	"encoding/json"
+	"io"
+	"io/fs"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+var getInputExamples = []struct {
+	Name   string
+	Mode   fs.FileMode
+	File   io.Reader
+	Input  string
+	JSON   string
+	Output []byte
+}{
+	{
+		Name:  "No file",
+		Mode:  fs.ModeCharDevice,
+		Input: "foo[]: 2, bar.another: false, existing: null, existing[]: 1",
+		JSON: `{
+			"foo": [2],
+			"bar": {
+				"another": false
+			},
+			"existing": [1]
+		}`,
+	},
+	{
+		Name:   "Raw file",
+		File:   strings.NewReader("a text file"),
+		Output: []byte("a text file"),
+	},
+	{
+		Name:   "Structured file no args",
+		File:   strings.NewReader(`{"foo":"bar"}`),
+		Output: []byte(`{"foo":"bar"}`),
+	},
+	{
+		Name: "JSON edit",
+		File: strings.NewReader(`{
+			"foo": [1],
+			"bar": {
+				"baz": true
+			},
+			"existing": [1, 2, 3]
+		}`),
+		Input: "foo[]: 2, bar.another: false, existing: null, existing[]: 1",
+		JSON: `{
+			"foo": [1, 2],
+			"bar": {
+				"another": false,
+				"baz": true
+			},
+			"existing": [1]
+		}`,
+	},
+}
+
 func TestGetInput(t *testing.T) {
-	file := strings.NewReader(`{
-		"foo": [1],
-		"bar": {
-			"baz": true
-		},
-		"existing": [1, 2, 3]
-	}`)
+	for _, example := range getInputExamples {
+		t.Run(example.Name, func(t *testing.T) {
+			input := []string{}
+			if example.Input != "" {
+				input = append(input, example.Input)
+			}
+			result, isStruct, err := getInput(example.Mode, example.File, input, ParseOptions{
+				EnableObjectDetection: true,
+			})
+			msg := ""
+			if e, ok := err.(Error); ok {
+				msg = e.Pretty()
+			}
+			require.NoError(t, err, msg)
 
-	result, err := getInput(0, file, []string{"foo[]: 2, bar.another: false, existing: null, existing[]: 1"}, ParseOptions{EnableObjectDetection: true})
-	assert.NoError(t, err)
+			if example.JSON != "" {
+				if !isStruct {
+					t.Fatal("input not recognized as structured data")
+				}
+				j, _ := json.Marshal(result)
+				assert.JSONEq(t, example.JSON, string(j))
+			}
 
-	j, _ := json.Marshal(result)
-	assert.JSONEq(t, `{
-		"foo": [1, 2],
-		"bar": {
-			"another": false,
-			"baz": true
-		},
-		"existing": [1]
-	}`, string(j))
+			if example.Output != nil {
+				assert.Equal(t, example.Output, result)
+			}
+		})
+	}
 }
 
 var marshalExamples = []struct {

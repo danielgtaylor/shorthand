@@ -1,15 +1,17 @@
 package shorthand
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
+	"unicode/utf8"
 )
+
+var ErrInvalidFile = errors.New("file cannot be parsed as structured data as it contains invalid UTF-8 characters")
 
 func ConvertMapString(value any) any {
 	switch tmp := value.(type) {
@@ -33,41 +35,49 @@ func ConvertMapString(value any) any {
 }
 
 // GetInput loads data from stdin (if present) and from the passed arguments,
-// returning the final structure.
-func GetInput(args []string) (any, error) {
-	return GetInputWithOptions(args, ParseOptions{
-		EnableFileInput:       true,
-		EnableObjectDetection: true,
-	})
-}
-
-func GetInputWithOptions(args []string, options ParseOptions) (any, error) {
+// returning the final structure. Returns the result, whether the result is
+// structured data (or raw file []byte), and if any errors occurred.
+func GetInput(args []string, options ParseOptions) (any, bool, error) {
 	stat, _ := os.Stdin.Stat()
 	return getInput(stat.Mode(), os.Stdin, args, options)
 }
 
-func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options ParseOptions) (any, error) {
+func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options ParseOptions) (any, bool, error) {
 	var stdin any
 
 	if (mode & os.ModeCharDevice) == 0 {
 		d, err := io.ReadAll(stdinFile)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
-		if err := yaml.Unmarshal(d, &stdin); err != nil {
-			if len(args) > 0 {
-				return nil, err
-			}
-			return nil, err
+		if len(args) == 0 {
+			// No modification requested, just pass the raw file through.
+			return d, false, nil
 		}
+
+		if !utf8.Valid(d) {
+			return nil, false, ErrInvalidFile
+		}
+
+		result, err := Unmarshal(string(d), ParseOptions{
+			EnableFileInput:     options.EnableFileInput,
+			ForceStringKeys:     options.ForceStringKeys,
+			ForceFloat64Numbers: options.ForceFloat64Numbers,
+			DebugLogger:         options.DebugLogger,
+		}, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		stdin = result
 	}
 
 	if len(args) == 0 {
-		return stdin, nil
+		return stdin, true, nil
 	}
 
-	return Unmarshal(strings.Join(args, " "), options, stdin)
+	result, err := Unmarshal(strings.Join(args, " "), options, stdin)
+	return result, true, err
 }
 
 func Unmarshal(input string, options ParseOptions, existing any) (any, Error) {
