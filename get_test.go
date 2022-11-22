@@ -257,6 +257,12 @@ var getExamples = []struct {
 		Go:    map[string]any{"foo": "bar", "id": 1.0, "tags": "a"},
 	},
 	{
+		Name:  "Field expression with slices",
+		Input: `{"items": [1, 2, 3, 4, 5]}`,
+		Query: `{first: items[:2], filtered: items[@ > 1]|[:1], last: items[-1:]}`,
+		Go:    map[string]any{"first": []any{1.0, 2.0, 3.0}, "filtered": []any{2.0, 3.0}, "last": []any{5.0}},
+	},
+	{
 		Name:  "Unclosed filter",
 		Input: `{}`,
 		Query: `foo[`,
