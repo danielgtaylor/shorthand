@@ -38,9 +38,12 @@ func GetPath(path string, input any, options GetOptions) (any, bool, Error) {
 }
 
 func (d *Document) parseUntil(open int, terminators ...rune) (quoted bool, canSlice bool, err Error) {
-	canSlice = true
 	d.buf.Reset()
+	return d.parseUntilNoReset(open, terminators...)
+}
 
+func (d *Document) parseUntilNoReset(open int, terminators ...rune) (quoted bool, canSlice bool, err Error) {
+	canSlice = true
 outer:
 	for {
 		p := d.peek()
@@ -491,6 +494,11 @@ func (d *Document) getFields(input any) (any, Error) {
 		}
 		if r == -1 {
 			break
+		}
+		if r == '[' {
+			d.buf.WriteRune(r)
+			d.parseUntilNoReset(1, '|')
+			continue
 		}
 		if r == ':' {
 			key = d.buf.String()
