@@ -146,6 +146,12 @@ var getExamples = []struct {
 		Go:    "ello",
 	},
 	{
+		Name:  "Truncate string",
+		Input: `{"field": "hello"}`,
+		Query: `field[:30]`,
+		Go:    "hello",
+	},
+	{
 		Name:  "Index bytes",
 		Input: map[string]any{"field": []byte("hello")},
 		Query: `field[1]`,
