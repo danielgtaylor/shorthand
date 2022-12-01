@@ -201,7 +201,10 @@ func (d *Document) getPathIndex(input any) (any, Error) {
 	if stopIndex < 0 {
 		stopIndex += l
 	}
-	if startIndex < 0 || startIndex > l-1 || stopIndex < 0 || stopIndex > l-1 || startIndex > stopIndex {
+	if stopIndex > l-1 {
+		stopIndex = l - 1
+	}
+	if startIndex < 0 || startIndex > l-1 || stopIndex < 0 || startIndex > stopIndex {
 		return nil, nil
 	}
 
