@@ -3,12 +3,12 @@ module github.com/danielgtaylor/shorthand/v2
 go 1.18
 
 require (
-	github.com/danielgtaylor/mexpr v1.7.3
+	github.com/danielgtaylor/mexpr v1.8.0
 	github.com/fxamacker/cbor/v2 v2.4.0
 	github.com/pelletier/go-toml v1.9.5
 	github.com/spf13/cobra v1.6.0
 	github.com/stretchr/testify v1.8.0
-	golang.org/x/exp v0.0.0-20221019170559-20944726eadf
+	golang.org/x/exp v0.0.0-20230111222715-75897c7a292a
 	gopkg.in/yaml.v3 v3.0.1
 )
 
