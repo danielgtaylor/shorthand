@@ -257,6 +257,12 @@ var getExamples = []struct {
 		Go:    map[string]any{"body": []any{map[string]any{"id": "a", "created": "2022"}}, "one": 1.0},
 	},
 	{
+		Name:  "Field expression nested multi path",
+		Input: `{"body": [{"id": "a", "created": "2022", "link": "..."}], "headers": {"one": 1, "two": 2}}`,
+		Query: `{body: body.{id, created: created}, one: headers.one}`,
+		Go:    map[string]any{"body": []any{map[string]any{"id": "a", "created": "2022"}}, "one": 1.0},
+	},
+	{
 		Name:  "Field expression with pipe",
 		Input: `{"foo": "bar", "link": {"id": 1, "verified": true, "tags": ["a", "b"]}}`,
 		Query: `{foo, tags: link.tags[@ startsWith a]|[0], id: link.id}`,
