@@ -503,7 +503,7 @@ func (d *Document) getFields(input any) (any, Error) {
 			d.parseUntilNoReset(1, '|')
 			continue
 		}
-		if r == ':' {
+		if r == ':' && open <= 1 {
 			key = d.buf.String()
 			d.buf.Reset()
 			d.skipWhitespace()
