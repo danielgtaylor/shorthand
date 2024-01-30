@@ -7,12 +7,21 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/mexpr"
-	"golang.org/x/exp/maps"
 )
 
 type GetOptions struct {
 	// DebugLogger sets a function to be used for printing out debug information.
 	DebugLogger func(format string, a ...interface{})
+}
+
+// mapKeys returns the keys of the map m.
+// The keys will be in an indeterminate order.
+func mapKeys[M ~map[K]V, K comparable, V any](m M) []K {
+	r := make([]K, 0, len(m))
+	for k := range m {
+		r = append(r, k)
+	}
+	return r
 }
 
 func GetPath(path string, input any, options GetOptions) (any, bool, Error) {
@@ -267,7 +276,7 @@ func (d *Document) getProp(input any) (any, bool, Error) {
 		if s, ok := key.(string); ok {
 			if key == "*" {
 				// Special case: wildcard property
-				keys := maps.Keys(m)
+				keys := mapKeys(m)
 				sort.Strings(keys)
 				values := make([]any, len(m))
 				for i, k := range keys {
