@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v3"
 )
 
 func BenchmarkMinJSON(b *testing.B) {
@@ -39,24 +38,24 @@ func BenchmarkFormattedJSON(b *testing.B) {
 	}
 }
 
-func BenchmarkYAML(b *testing.B) {
-	b.ReportAllocs()
-	var v interface{}
+// func BenchmarkYAML(b *testing.B) {
+// 	b.ReportAllocs()
+// 	var v interface{}
 
-	large := []byte(`
-    foo:
-      bar:
-        id: 1
-        tags: [one, two]
-        cost: 3.14
-      baz:
-        id: 2
-`)
+// 	large := []byte(`
+//     foo:
+//       bar:
+//         id: 1
+//         tags: [one, two]
+//         cost: 3.14
+//       baz:
+//         id: 2
+// `)
 
-	for n := 0; n < b.N; n++ {
-		assert.NoError(b, yaml.Unmarshal(large, &v))
-	}
-}
+// 	for n := 0; n < b.N; n++ {
+// 		assert.NoError(b, yaml.Unmarshal(large, &v))
+// 	}
+// }
 
 func BenchmarkShorthand(b *testing.B) {
 	b.ReportAllocs()
