@@ -95,6 +95,26 @@ func TestGetInput(t *testing.T) {
 	}
 }
 
+func TestGetInputInvalidUTF8StructuredEdit(t *testing.T) {
+	result, isStruct, err := getInput(0, strings.NewReader(string([]byte{0xff})), []string{"a: 1"}, ParseOptions{})
+	require.ErrorIs(t, err, ErrInvalidFile)
+	assert.False(t, isStruct)
+	assert.Nil(t, result)
+}
+
+func TestGetInputForceFloat64Numbers(t *testing.T) {
+	result, isStruct, err := getInput(0, strings.NewReader(`{"count": 1}`), []string{"value: 2"}, ParseOptions{
+		ForceFloat64Numbers: true,
+		EnableObjectDetection: true,
+	})
+	require.NoError(t, err)
+	require.True(t, isStruct)
+	assert.Equal(t, map[string]any{
+		"count": 1.0,
+		"value": 2.0,
+	}, result)
+}
+
 var marshalExamples = []struct {
 	Name   string
 	Input  any
@@ -296,6 +316,32 @@ func TestMarshalCLINonStringMapKeysStayUnquoted(t *testing.T) {
 		"2": "two",
 	})
 	assert.Equal(t, `1: one, "2": two`, out)
+}
+
+func TestMarshalCLIQuotesReservedPrefixesAndWhitespaceKeys(t *testing.T) {
+	out := MarshalCLI(map[string]any{
+		" spaced ": "@file",
+		"pct":      "%not-really-base64",
+	})
+	assert.Equal(t, `" spaced ": "@file", pct: "%not-really-base64"`, out)
+}
+
+func TestConvertMapStringRecursivelyConvertsNestedKeys(t *testing.T) {
+	input := map[any]any{
+		1: map[any]any{
+			true: []any{
+				map[any]any{2: "value"},
+			},
+		},
+	}
+
+	assert.Equal(t, map[string]any{
+		"1": map[string]any{
+			"true": []any{
+				map[string]any{"2": "value"},
+			},
+		},
+	}, ConvertMapString(input))
 }
 
 func TestUnmarshalCommentDisambiguation(t *testing.T) {

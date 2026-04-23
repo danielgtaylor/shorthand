@@ -300,7 +300,7 @@ func (d *Document) parseQuoted(escapeProp bool) Error {
 		}
 
 		if escapeProp {
-			if r == '.' || r == '{' || r == '[' || r == ':' || r == '^' {
+			if r == '.' || r == '{' || r == '[' || r == ':' || r == '^' || r == ']' {
 				d.buf.WriteRune('\\')
 			}
 		}

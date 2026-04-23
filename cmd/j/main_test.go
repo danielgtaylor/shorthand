@@ -42,6 +42,26 @@ func TestMarshalOutputShorthandMatchesLibrary(t *testing.T) {
 	}
 }
 
+func TestMarshalOutputUnsupportedFormat(t *testing.T) {
+	_, err := marshalOutput(map[string]any{"hello": "world"}, "ini")
+	if err == nil {
+		t.Fatal("expected an error for unsupported format")
+	}
+	if !strings.Contains(err.Error(), `unsupported format "ini"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMarshalOutputTOMLRejectsNonMap(t *testing.T) {
+	_, err := marshalOutput([]any{"hello"}, "toml")
+	if err == nil {
+		t.Fatal("expected an error for non-map TOML input")
+	}
+	if !strings.Contains(err.Error(), "TOML only supports maps") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 type fakeFileInfo struct {
 	mode fs.FileMode
 }
