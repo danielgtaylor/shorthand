@@ -146,11 +146,19 @@ func (d *Document) error(length uint, format string, a ...any) Error {
 func (d *Document) skipWhitespace() {
 	for {
 		peek := d.peek()
-		if unicode.IsSpace(peek) {
+		switch peek {
+		case ' ', '\t', '\n', '\r', '\v', '\f':
 			d.next()
 			continue
+		default:
+			// peek is int32; only check unicode.IsSpace for non-ASCII (> 0x7f).
+			// -1 (EOF) and ASCII non-whitespace fall through to return.
+			if peek > 0x7f && unicode.IsSpace(peek) {
+				d.next()
+				continue
+			}
+			return
 		}
-		break
 	}
 }
 
@@ -180,7 +188,10 @@ func endsWithWhitespace(s string) bool {
 	if s == "" {
 		return false
 	}
-
+	b := s[len(s)-1]
+	if b < utf8.RuneSelf {
+		return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
+	}
 	r, _ := utf8.DecodeLastRuneInString(s)
 	return unicode.IsSpace(r)
 }

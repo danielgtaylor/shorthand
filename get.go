@@ -355,7 +355,7 @@ func (d *Document) getPropRecursive(input any) ([]any, Error) {
 }
 
 func (d *Document) findPropRecursive(key, input any) ([]any, Error) {
-	results := []any{}
+	var results []any
 
 	savedPos := d.pos
 	if m, ok := input.(map[string]any); ok {
