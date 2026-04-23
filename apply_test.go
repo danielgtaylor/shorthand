@@ -327,6 +327,59 @@ func TestApplyDeleteAppendIndexNoOp(t *testing.T) {
 	}, result)
 }
 
+func TestApplySwapMissingPathBehaviors(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing map[string]any
+		input    string
+		want     map[string]any
+	}{
+		{
+			name:     "Move into missing path",
+			existing: map[string]any{"foo": "hello"},
+			input:    "{bar ^ foo}",
+			want:     map[string]any{"bar": "hello"},
+		},
+		{
+			name:     "Move out of missing path",
+			existing: map[string]any{"bar": "hello"},
+			input:    "{bar ^ foo}",
+			want:     map[string]any{"foo": "hello"},
+		},
+		{
+			name:     "Swap with both sides missing is no-op",
+			existing: map[string]any{"keep": true},
+			input:    "{bar ^ foo}",
+			want:     map[string]any{"keep": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDocument(ParseOptions{})
+			require.NoError(t, d.Parse(tt.input))
+
+			result, err := d.Apply(tt.existing)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestApplyForceFloat64NumbersOnPathKeys(t *testing.T) {
+	d := NewDocument(ParseOptions{ForceFloat64Numbers: true})
+	require.NoError(t, d.Parse(`{items.1: value}`))
+
+	result, err := d.Apply(nil)
+	require.NoError(t, err)
+	root, ok := result.(map[string]any)
+	require.True(t, ok)
+
+	items, ok := root["items"].(map[any]any)
+	require.True(t, ok)
+	assert.Equal(t, "value", items[1.0])
+}
+
 func TestApply(t *testing.T) {
 	for _, example := range applyExamples {
 		t.Run(example.Name, func(t *testing.T) {

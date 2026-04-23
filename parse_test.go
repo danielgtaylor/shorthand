@@ -2,6 +2,8 @@ package shorthand
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -220,6 +222,74 @@ b	{
 		}`,
 		Error: "{c: 1\n\t\t\t]\n...^",
 	},
+}
+
+func TestParserAdditionalErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		err   string
+	}{
+		{
+			name:  "Object closing bracket mismatch",
+			input: `{a]`,
+			err:   "Expected property or '}' while parsing object but got ']'",
+		},
+		{
+			name:  "Missing property name",
+			input: `{ : 1 }`,
+			err:   "expected at least one property name",
+		},
+		{
+			name:  "Index unexpected terminator",
+			input: `{a[1}: 2}`,
+			err:   "Expected ']' but found }",
+		},
+		{
+			name:  "Missing colon before value",
+			input: `{a b}`,
+			err:   "Expected colon but got }",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDocument(ParseOptions{
+				EnableObjectDetection: true,
+			})
+			err := d.Parse(tt.input)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.err)
+		})
+	}
+}
+
+func TestParserInvalidJSONFileInclude(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.json")
+	require.NoError(t, os.WriteFile(path, []byte("{nope"), 0o644))
+
+	d := NewDocument(ParseOptions{
+		EnableFileInput: true,
+		EnableObjectDetection: true,
+	})
+	err := d.Parse("a: @" + path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Unable to unmarshal JSON")
+}
+
+func TestParserInvalidCBORFileInclude(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.cbor")
+	require.NoError(t, os.WriteFile(path, []byte("not-cbor"), 0o644))
+
+	d := NewDocument(ParseOptions{
+		EnableFileInput: true,
+		EnableObjectDetection: true,
+	})
+	err := d.Parse("a: @" + path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Unable to unmarshal CBOR")
 }
 
 func TestParser(t *testing.T) {

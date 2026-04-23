@@ -15,7 +15,7 @@ type GetOptions struct {
 	DebugLogger func(format string, a ...any)
 }
 
-var propPathUnescaper = strings.NewReplacer(`\.`, ".", `\{`, "{", `\[`, "[", `\:`, ":", `\^`, "^")
+var propPathUnescaper = strings.NewReplacer(`\.`, ".", `\{`, "{", `\[`, "[", `\]`, "]", `\:`, ":", `\^`, "^")
 
 // unescapePropPath removes prop-escaping backslashes added by parseQuoted(escapeProp=true).
 func unescapePropPath(s string) string {

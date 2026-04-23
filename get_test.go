@@ -403,6 +403,85 @@ func TestGetPathFound(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
+func TestGetPathAdditionalEdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  any
+		query  string
+		want   any
+		found  bool
+		errMsg string
+	}{
+		{
+			name:  "Escaped unquoted property path",
+			input: map[string]any{"a.b": map[string]any{"c[d]": "ok"}},
+			query: `a\.b.c\[d\]`,
+			want:  "ok",
+			found: true,
+		},
+		{
+			name:  "Negative unicode string slice",
+			input: map[string]any{"field": "a😈bc"},
+			query: `field[-2:]`,
+			want:  "bc",
+			found: true,
+		},
+		{
+			name:  "Negative byte slice",
+			input: map[string]any{"field": []byte("hello")},
+			query: `field[-2:]`,
+			want:  []byte("lo"),
+			found: true,
+		},
+		{
+			name:  "Flatten non array returns nil",
+			input: map[string]any{"field": "hello"},
+			query: `field|[]`,
+			want:  nil,
+			found: true,
+		},
+		{
+			name:  "Filter with nested path on scalar input is empty",
+			input: map[string]any{"items": []any{"a", "b"}},
+			query: `items[@.missing]`,
+			want:  []any{},
+			found: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found, err := GetPath(tt.query, tt.input, GetOptions{})
+			if tt.errMsg != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.found, found)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGetFieldSelectionUnescapesOutputKeys(t *testing.T) {
+	input := map[string]any{
+		"link": map[string]any{
+			"foo.bar": 1,
+			"a[b]":    2,
+		},
+	}
+
+	result, found, err := GetPath(`link.{"foo.bar", "a[b]"}`, input, GetOptions{})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]any{
+		"foo.bar": 1,
+		"a[b]":    2,
+	}, result)
+}
+
 var getBenchInput = map[string]any{
 	"items": []any{
 		0,
