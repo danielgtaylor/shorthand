@@ -48,11 +48,12 @@ type Operation struct {
 type Document struct {
 	Operations []Operation
 
-	options    ParseOptions
-	expression string
-	pos        uint
-	lastWidth  uint
-	buf        bytes.Buffer
+	options           ParseOptions
+	expression        string
+	pos               uint
+	lastWidth         uint
+	autoWrappedObject bool
+	buf               bytes.Buffer
 }
 
 func NewDocument(options ParseOptions) *Document {
@@ -64,6 +65,7 @@ func NewDocument(options ParseOptions) *Document {
 func (d *Document) Parse(input string) Error {
 	d.expression = input
 	d.pos = 0
+	d.autoWrappedObject = false
 
 	if d.options.EnableObjectDetection {
 		// Try and determine if this is actually an object without the outer
@@ -78,6 +80,7 @@ func (d *Document) Parse(input string) Error {
 			if r == ':' || r == '^' {
 				// We have found an object! Wrap it and continue.
 				d.expression = "{" + input + "}"
+				d.autoWrappedObject = true
 				if d.options.DebugLogger != nil {
 					d.options.DebugLogger("Detected object, wrapping in { and }")
 				}

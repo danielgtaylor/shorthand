@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -274,4 +275,220 @@ func TestMarshalCLIEmptyMap(t *testing.T) {
 	result, err := Unmarshal(out, ParseOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{}, result)
+}
+
+func TestUnmarshalCommentDisambiguation(t *testing.T) {
+	commentDT, err := time.Parse(time.RFC3339, "2025-04-03T15:19:22Z")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input string
+		want  map[string]any
+		err   string
+	}{
+		{
+			name:  "URL without whitespace",
+			input: "url: http://test.de:4242",
+			want: map[string]any{
+				"url": "http://test.de:4242",
+			},
+		},
+		{
+			name:  "String with mid-slash",
+			input: "value: foo//bar",
+			want: map[string]any{
+				"value": "foo//bar",
+			},
+		},
+		{
+			name:  "Integer with comment",
+			input: "a: 1//foo",
+			want: map[string]any{
+				"a": 1,
+			},
+		},
+		{
+			name:  "Boolean with comment",
+			input: "a: true//foo",
+			want: map[string]any{
+				"a": true,
+			},
+		},
+		{
+			name:  "String comment requires whitespace",
+			input: "a: foo //bar",
+			want: map[string]any{
+				"a": "foo",
+			},
+		},
+		{
+			name:  "URL with trailing comment",
+			input: "url: http://test.de:4242 // prod",
+			want: map[string]any{
+				"url": "http://test.de:4242",
+			},
+		},
+		{
+			name:  "Leading comment before value",
+			input: "a: //foo\n 1",
+			want: map[string]any{
+				"a": 1,
+			},
+		},
+		{
+			name:  "Array integer with comment",
+			input: "[1//foo\n, 2]",
+			want: map[string]any{
+				"": []any{1, 2},
+			},
+		},
+		{
+			name:  "Array string with mid-slash",
+			input: "[foo//bar, 2]",
+			want: map[string]any{
+				"": []any{"foo//bar", 2},
+			},
+		},
+		{
+			name:  "Array URLs",
+			input: "[http://a, https://b/x//y]",
+			want: map[string]any{
+				"": []any{"http://a", "https://b/x//y"},
+			},
+		},
+		{
+			name:  "Object continues after numeric comment",
+			input: "a: 1//foo\nb: 2",
+			want: map[string]any{
+				"a": 1,
+				"b": 2,
+			},
+		},
+		{
+			name:  "Object continues after string with mid-slash",
+			input: "a: foo//bar, b: 2",
+			want: map[string]any{
+				"a": "foo//bar",
+				"b": 2,
+			},
+		},
+		{
+			name:  "Null with comment",
+			input: "a: null//foo",
+			want: map[string]any{
+				"a": nil,
+			},
+		},
+		{
+			name:  "Float with comment",
+			input: "a: 1.25//foo",
+			want: map[string]any{
+				"a": 1.25,
+			},
+		},
+		{
+			name:  "Exponent with comment",
+			input: "a: 1e3//foo",
+			want: map[string]any{
+				"a": 1000.0,
+			},
+		},
+		{
+			name:  "Datetime with comment",
+			input: "a: 2025-04-03T15:19:22Z//foo",
+			want: map[string]any{
+				"a": commentDT,
+			},
+		},
+		{
+			name:  "Incomplete exponent stays string",
+			input: "a: 1e//foo",
+			want: map[string]any{
+				"a": "1e//foo",
+			},
+		},
+		{
+			name:  "Bare plus stays string",
+			input: "a: +//foo",
+			want: map[string]any{
+				"a": "+//foo",
+			},
+		},
+		{
+			name:  "Bare dot stays string",
+			input: "a: .//foo",
+			want: map[string]any{
+				"a": ".//foo",
+			},
+		},
+		{
+			name:  "File input with trailing comment",
+			input: "a: @testdata/hello.txt//foo",
+			want: map[string]any{
+				"a": "hello\n",
+			},
+		},
+		{
+			name:  "Base64 input with trailing comment",
+			input: "a: %wg==//foo",
+			want: map[string]any{
+				"a": []byte{0xc2},
+			},
+		},
+		{
+			name:  "Invalid base64 before comment errors",
+			input: "a: %notbase64//foo",
+			err:   "Unable to Base64 decode",
+		},
+		{
+			name:  "Top level comment before array",
+			input: "//foo\n[1, 2]",
+			want: map[string]any{
+				"": []any{1, 2},
+			},
+		},
+		{
+			name:  "Trailing comment after object",
+			input: "{a: 1} //foo",
+			want: map[string]any{
+				"a": 1,
+			},
+		},
+		{
+			name:  "Trailing comment after array",
+			input: "[1, 2] //foo",
+			want: map[string]any{
+				"": []any{1, 2},
+			},
+		},
+		{
+			name:  "Multiple consecutive comments before value",
+			input: "a: //one\n //two\n 1",
+			want: map[string]any{
+				"a": 1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Unmarshal(tt.input, ParseOptions{
+				EnableObjectDetection: true,
+				EnableFileInput:       true,
+			}, nil)
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.err)
+				return
+			}
+
+			require.NoError(t, err)
+			if root, ok := tt.want[""]; ok && len(tt.want) == 1 {
+				assert.Equal(t, root, result)
+			} else {
+				assert.Equal(t, tt.want, result)
+			}
+		})
+	}
 }
