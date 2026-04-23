@@ -5,10 +5,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/mexpr"
 )
+
+// mexprCache stores parsed mexpr ASTs keyed by expression string.
+// The *mexpr.Node tree is read-only during interpretation so it is safe
+// to share across goroutines.
+var mexprCache sync.Map
 
 type GetOptions struct {
 	// DebugLogger sets a function to be used for printing out debug information.
@@ -154,12 +160,19 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 }
 
 func (d *Document) getFiltered(expr string, input any) (any, Error) {
-	ast, err := mexpr.Parse(expr, nil)
-	if err != nil {
-		// Pos = current - expression - 1 for bracket + error offset.
-		// a.b.c[filter is here]
-		// current position....^
-		return nil, NewError(&d.expression, d.pos-uint(len(expr)+1)+uint(err.Offset()), uint(err.Length()), err.Error())
+	var ast *mexpr.Node
+	if v, ok := mexprCache.Load(expr); ok {
+		ast = v.(*mexpr.Node)
+	} else {
+		var merr mexpr.Error
+		ast, merr = mexpr.Parse(expr, nil)
+		if merr != nil {
+			// Pos = current - expression - 1 for bracket + error offset.
+			// a.b.c[filter is here]
+			// current position....^
+			return nil, NewError(&d.expression, d.pos-uint(len(expr)+1)+uint(merr.Offset()), uint(merr.Length()), merr.Error())
+		}
+		mexprCache.Store(expr, ast)
 	}
 	interpreter := mexpr.NewInterpreter(ast, mexpr.UnquotedStrings)
 	savedPos := d.pos

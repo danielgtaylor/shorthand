@@ -14,6 +14,16 @@ import (
 	"github.com/fxamacker/cbor/v2"
 )
 
+// smallIndexStrs avoids strconv.Itoa allocations for the most common array indices.
+var smallIndexStrs = [16]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}
+
+func arrayIndexPath(path string, idx int) string {
+	if idx >= 0 && idx < len(smallIndexStrs) {
+		return path + "[" + smallIndexStrs[idx] + "]"
+	}
+	return path + "[" + strconv.Itoa(idx) + "]"
+}
+
 var JSONReplacements = map[rune]rune{
 	'"':  '"',
 	'\\': '\\',
@@ -352,12 +362,18 @@ func (d *Document) parseIndex() Error {
 func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 	start := d.pos
 	d.skipWhitespace()
+	propStart := d.pos // position after leading whitespace, where the name begins
+	canSlice := true   // use expression subslice instead of buf when no special chars
 	d.buf.Reset()
 
 	for {
 		r := d.next()
 
 		if r == '[' {
+			if canSlice {
+				d.buf.WriteString(d.expression[propStart : d.pos-1])
+				canSlice = false
+			}
 			d.buf.WriteRune(r)
 			if err := d.parseIndex(); err != nil {
 				return "", err
@@ -371,6 +387,11 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 		}
 
 		if r == '"' {
+			if canSlice && d.pos > propStart+1 {
+				// flush any prefix chars before the quote
+				d.buf.WriteString(d.expression[propStart : d.pos-1])
+			}
+			canSlice = false
 			if err := d.parseQuoted(true); err != nil {
 				return "", err
 			}
@@ -389,34 +410,53 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 		}
 
 		if r == '\\' {
+			if canSlice {
+				d.buf.WriteString(d.expression[propStart : d.pos-1])
+				canSlice = false
+			}
 			if d.parseEscape(false, true) {
 				continue
 			}
 		}
 
-		if d.skipComments(r) {
-			continue
+		// Only call skipComments for '/' to avoid the function-call overhead on every char.
+		if r == '/' {
+			slashPos := d.pos - 1 // save position of '/' before skipComments advances d.pos
+			if d.skipComments(r) {
+				if canSlice {
+					d.buf.WriteString(d.expression[propStart:slashPos])
+					canSlice = false
+				}
+				continue
+			}
 		}
 
-		d.buf.WriteRune(r)
+		if !canSlice {
+			d.buf.WriteRune(r)
+		}
+		// When canSlice=true, r is implicitly included in d.expression[propStart:d.pos].
 	}
 
-	var prop string
-	if path != "" {
-		prop = path + "." + strings.TrimSpace(d.buf.String())
+	var propName string
+	if canSlice {
+		// Subslice the expression directly — no allocation for the common case.
+		propName = strings.TrimRight(d.expression[propStart:d.pos], " \t\r\n\v\f")
 	} else {
-		prop = strings.TrimSpace(d.buf.String())
+		propName = strings.TrimSpace(d.buf.String())
 	}
 
 	if d.options.DebugLogger != nil {
-		d.options.DebugLogger("Setting key %s", prop)
+		d.options.DebugLogger("Setting key %s", propName)
 	}
 
-	if prop == "" {
+	if propName == "" {
 		return "", d.error(d.pos-start, "expected at least one property name")
 	}
 
-	return prop, nil
+	if path != "" {
+		return path + "." + propName, nil
+	}
+	return propName, nil
 }
 
 func (d *Document) parseObject(path string) Error {
@@ -655,7 +695,7 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 					if idx > 0 && strings.Contains(path, "[]") {
 						path = strings.ReplaceAll(path, "[]", "[-1]")
 					}
-					if err := d.parseValue(path+"["+strconv.Itoa(idx)+"]", true, true); err != nil {
+					if err := d.parseValue(arrayIndexPath(path, idx), true, true); err != nil {
 						return err
 					}
 
