@@ -5,10 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     name: Build & Test
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Setup go
-        uses: actions/setup-go@v1
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.18"
+          go-version: "1.21"
       - run: go test -coverprofile=coverage.txt -covermode=atomic ./...
-      - uses: codecov/codecov-action@v1
+      - uses: codecov/codecov-action@v4
