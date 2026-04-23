@@ -219,7 +219,7 @@ func (d *Document) parseEscape(quoted bool, includeEscape bool) bool {
 		d.buf.WriteRune(replace)
 		return true
 	}
-	if (peek == 'u' || peek == 'U') && len(d.expression) >= int(d.pos)+5 {
+	if peek == 'u' && len(d.expression) >= int(d.pos)+5 {
 		r := getu4([]byte(d.expression[d.pos-1:]))
 		if r >= 0 {
 			b := make([]byte, 4)
@@ -280,7 +280,7 @@ func (d *Document) parseIndex() Error {
 	for {
 		r := d.next()
 
-		if (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '^' {
+		if (r >= '0' && r <= '9') || r == '-' || r == '^' {
 			d.buf.WriteRune(r)
 			continue
 		}

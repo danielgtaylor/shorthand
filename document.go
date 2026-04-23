@@ -18,7 +18,7 @@ type ParseOptions struct {
 	EnableFileInput bool
 
 	// EnableObjectDetection will enable omitting the outer `{` and `}` for
-	// objects, which can be useful for some applications such as command line
+	// objects, which can be useful for some applications such as command-line
 	// arguments.
 	EnableObjectDetection bool
 
@@ -36,7 +36,7 @@ type ParseOptions struct {
 	ForceFloat64Numbers bool
 
 	// DebugLogger sets a function to be used for printing out debug information.
-	DebugLogger func(format string, a ...interface{})
+	DebugLogger func(format string, a ...any)
 }
 
 type Operation struct {
@@ -81,6 +81,7 @@ func (d *Document) Parse(input string) Error {
 				if d.options.DebugLogger != nil {
 					d.options.DebugLogger("Detected object, wrapping in { and }")
 				}
+				break
 			}
 		}
 		d.pos = 0
@@ -93,7 +94,7 @@ func (d *Document) Parse(input string) Error {
 	d.skipWhitespace()
 	d.skipComments(d.peek())
 	if !d.expect(-1) {
-		return d.error(1, "Expected EOF but found additional input: "+string(d.expression[d.pos]))
+		return d.error(1, "Expected EOF but found additional input: %s", runeStr(d.peek()))
 	}
 	return nil
 }

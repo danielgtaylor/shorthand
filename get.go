@@ -5,13 +5,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/mexpr"
 )
 
 type GetOptions struct {
 	// DebugLogger sets a function to be used for printing out debug information.
-	DebugLogger func(format string, a ...interface{})
+	DebugLogger func(format string, a ...any)
+}
+
+// unescapePropPath removes prop-escaping backslashes added by parseQuoted(escapeProp=true).
+func unescapePropPath(s string) string {
+	return strings.NewReplacer(`\.`, ".", `\{`, "{", `\[`, "[", `\:`, ":", `\^`, "^").Replace(s)
 }
 
 // mapKeys returns the keys of the map m.
@@ -180,6 +186,25 @@ func (d *Document) getFiltered(expr string, input any) (any, Error) {
 	return nil, nil
 }
 
+func stringRuneSlice(s string, startIndex int, stopIndex int) string {
+	byteStart := 0
+	byteEnd := len(s)
+	runeIndex := 0
+
+	for i := range s {
+		if runeIndex == startIndex {
+			byteStart = i
+		}
+		if runeIndex == stopIndex+1 {
+			byteEnd = i
+			break
+		}
+		runeIndex++
+	}
+
+	return s[byteStart:byteEnd]
+}
+
 func (d *Document) getPathIndex(input any) (any, Error) {
 	isSlice, startIndex, stopIndex, expr, err := d.parsePathIndex()
 	if err != nil {
@@ -197,7 +222,7 @@ func (d *Document) getPathIndex(input any) (any, Error) {
 	l := 0
 	switch t := input.(type) {
 	case string:
-		l = len(t)
+		l = utf8.RuneCountInString(t)
 	case []byte:
 		l = len(t)
 	case []any:
@@ -219,10 +244,7 @@ func (d *Document) getPathIndex(input any) (any, Error) {
 
 	switch t := input.(type) {
 	case string:
-		if !isSlice {
-			return string(t[startIndex]), nil
-		}
-		return t[startIndex : stopIndex+1], nil
+		return stringRuneSlice(t, startIndex, stopIndex), nil
 	case []byte:
 		if !isSlice {
 			return t[startIndex], nil
@@ -437,6 +459,7 @@ outer:
 				// side on every item in the slice.
 				var err Error
 				var result any
+				var resultFound bool
 				savedPos := d.pos
 				out := make([]any, 0, len(s))
 
@@ -448,11 +471,19 @@ outer:
 
 				for i := range s {
 					d.pos = savedPos
-					result, _, err = d.getPath(s[i])
+					result, resultFound, err = d.getPath(s[i])
 					if err != nil {
 						return nil, false, err
 					}
-					if result != nil {
+					// When path was consumed, use resultFound to correctly distinguish
+					// "field absent" (skip) from "field is null" (keep). When no path
+					// was consumed (e.g. after recursive descent passes results through),
+					// fall back to a non-nil check.
+					if d.pos > savedPos {
+						if resultFound {
+							out = append(out, result)
+						}
+					} else if result != nil {
 						out = append(out, result)
 					}
 				}
@@ -526,23 +557,16 @@ func (d *Document) getFields(input any) (any, Error) {
 		}
 		if open == 0 || (open == 1 && r == ',') {
 			path := d.buf.String()
-			var value any
 			if key == "" {
-				key = path
-				if m, ok := input.(map[any]any); ok {
-					value = m[key]
-				}
-				if m, ok := input.(map[string]any); ok {
-					value = m[key]
-				}
-			} else {
-				var err Error
-				value, _, err = GetPath(path, input, GetOptions{
-					DebugLogger: d.options.DebugLogger,
-				})
-				if err != nil {
-					return nil, err
-				}
+				// Use the unescaped path as the output key so that quoted names
+				// like `{"foo.bar"}` produce key "foo.bar", not "foo\.bar".
+				key = unescapePropPath(path)
+			}
+			value, _, err := GetPath(path, input, GetOptions{
+				DebugLogger: d.options.DebugLogger,
+			})
+			if err != nil {
+				return nil, err
 			}
 			result[key] = value
 			if r == '}' {

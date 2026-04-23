@@ -274,10 +274,13 @@ func FuzzParser(f *testing.F) {
 	f.Add("0")
 	f.Add(`"hello"`)
 	f.Add(`"\u0020"`)
+	f.Add("a: 1")
+	f.Add("a ^ b")
 	f.Fuzz(func(t *testing.T, s string) {
 		d := NewDocument(
 			ParseOptions{
-				EnableFileInput: true,
+				EnableFileInput:       true,
+				EnableObjectDetection: true,
 				DebugLogger: func(format string, a ...interface{}) {
 					t.Logf(format, a...)
 				},

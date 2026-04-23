@@ -1,6 +1,7 @@
 package shorthand
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,10 +62,11 @@ func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options Pars
 		}
 
 		result, err := Unmarshal(string(d), ParseOptions{
-			EnableFileInput:     options.EnableFileInput,
-			ForceStringKeys:     options.ForceStringKeys,
-			ForceFloat64Numbers: options.ForceFloat64Numbers,
-			DebugLogger:         options.DebugLogger,
+			EnableFileInput:       options.EnableFileInput,
+			EnableObjectDetection: options.EnableObjectDetection,
+			ForceStringKeys:       options.ForceStringKeys,
+			ForceFloat64Numbers:   options.ForceFloat64Numbers,
+			DebugLogger:           options.DebugLogger,
 		}, nil)
 		if err != nil {
 			return nil, false, err
@@ -110,6 +112,46 @@ func (o MarshalOptions) GetSeparator(level int) string {
 	return "," + o.Spacer
 }
 
+func quoteString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func containsAnyRune(s string, chars string) bool {
+	for _, r := range s {
+		if strings.ContainsRune(chars, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldQuoteKey(s string) bool {
+	return s == "" ||
+		canCoerce(s) ||
+		strings.TrimSpace(s) != s ||
+		strings.Contains(s, "//") ||
+		containsAnyRune(s, "\".[]{}:^,\\")
+}
+
+func shouldQuoteStringValue(s string) bool {
+	return s == "" ||
+		s == "undefined" ||
+		canCoerce(s) ||
+		strings.TrimSpace(s) != s ||
+		strings.HasPrefix(s, "@") ||
+		strings.HasPrefix(s, "%") ||
+		strings.Contains(s, "//") ||
+		containsAnyRune(s, "\"[],{}\n\r\t\\")
+}
+
+func renderStringKey(s string) string {
+	if shouldQuoteKey(s) {
+		return quoteString(s)
+	}
+	return s
+}
+
 func Marshal(input any, options ...MarshalOptions) string {
 	if len(options) == 0 {
 		options = []MarshalOptions{{}}
@@ -119,7 +161,7 @@ func Marshal(input any, options ...MarshalOptions) string {
 
 func MarshalCLI(input any) string {
 	result := Marshal(input, MarshalOptions{Spacer: " ", UseFile: true})
-	if strings.HasPrefix(result, "{") {
+	if strings.HasPrefix(result, "{") && result != "{}" {
 		result = result[1 : len(result)-1]
 	}
 	return result
@@ -149,7 +191,11 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 				dot = "."
 			}
 			for k := range v {
-				return dot + fmt.Sprintf("%v", k) + renderValue(options, level, true, v[k])
+				key := fmt.Sprintf("%v", k)
+				if s, ok := k.(string); ok {
+					key = renderStringKey(s)
+				}
+				return dot + key + renderValue(options, level, true, v[k])
 			}
 		}
 
@@ -166,7 +212,13 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 
 		var fields []string
 		for _, k := range keys {
-			fields = append(fields, fmt.Sprintf("%v", k)+renderValue(options, level+1, true, v[k]))
+			var key string
+			if s, ok := k.(string); ok {
+				key = renderStringKey(s)
+			} else {
+				key = renderStringKey(fmt.Sprintf("%v", k))
+			}
+			fields = append(fields, key+renderValue(options, level+1, true, v[k]))
 		}
 
 		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"
@@ -178,7 +230,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 				dot = "."
 			}
 			for k := range v {
-				return dot + k + renderValue(options, level, true, v[k])
+				return dot + renderStringKey(k) + renderValue(options, level, true, v[k])
 			}
 		}
 
@@ -193,11 +245,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 
 		var fields []string
 		for _, k := range keys {
-			kStr := k
-			if canCoerce(k) {
-				kStr = `"` + k + `"`
-			}
-			fields = append(fields, kStr+renderValue(options, level+1, true, v[k]))
+			fields = append(fields, renderStringKey(k)+renderValue(options, level+1, true, v[k]))
 		}
 
 		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"
@@ -212,15 +260,11 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 		return prefix + "[" + options.GetIndent(level+1) + strings.Join(items, options.GetSeparator(level+1)) + options.GetIndent(level) + "]"
 	default:
 		if s, ok := v.(string); ok {
-			if canCoerce(s) {
-				// This is a string but needs to be quoted so it doesn't get coerced
-				// into some other type when parsed.
-				v = `"` + strings.Replace(s, `"`, `\"`, -1) + `"`
-			}
-
 			if options.UseFile && (len(s) > 50 || strings.Contains(s, "\n")) {
 				// Long strings are represented as being loaded from files.
 				v = "@file"
+			} else if shouldQuoteStringValue(s) {
+				v = quoteString(s)
 			}
 		}
 

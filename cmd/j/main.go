@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 
 	"github.com/danielgtaylor/shorthand/v2"
@@ -13,6 +12,35 @@ import (
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 )
+
+func marshalOutput(result any, format string) ([]byte, error) {
+	switch format {
+	case "json":
+		return json.MarshalIndent(result, "", "  ")
+	case "cbor":
+		return cbor.Marshal(result)
+	case "yaml":
+		return yaml.Marshal(result)
+	case "toml":
+		if result == nil {
+			return nil, fmt.Errorf("TOML only supports maps but found null")
+		}
+		converted := shorthand.ConvertMapString(result)
+		m, ok := converted.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("TOML only supports maps but found %T", result)
+		}
+		t, err := toml.TreeFromMap(m)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(t.String()), nil
+	case "shorthand":
+		return []byte(shorthand.MarshalPretty(result)), nil
+	default:
+		return nil, fmt.Errorf("unsupported format %q", format)
+	}
+}
 
 func main() {
 	var format *string
@@ -26,12 +54,14 @@ func main() {
 		Short:   "Generate shorthand structured data",
 		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", os.Args[0]),
 		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) == 0 && *query == "" {
+			stat, _ := os.Stdin.Stat()
+			stdinPiped := (stat.Mode() & os.ModeCharDevice) == 0
+			if len(args) == 0 && *query == "" && !stdinPiped {
 				fmt.Println("At least one arg or --query need to be passed")
 				os.Exit(1)
 			}
 			if *verbose {
-				debugLog = func(format string, a ...interface{}) {
+				debugLog = func(format string, a ...any) {
 					fmt.Printf(format, a...)
 					fmt.Println()
 				}
@@ -48,7 +78,8 @@ func main() {
 					fmt.Println(e.Pretty())
 					os.Exit(1)
 				} else {
-					panic(err)
+					fmt.Println(err)
+					os.Exit(1)
 				}
 			}
 			if !isStructured {
@@ -68,30 +99,11 @@ func main() {
 				}
 			}
 
-			var marshalled []byte
-
-			switch *format {
-			case "json":
-				marshalled, err = json.MarshalIndent(result, "", "  ")
-			case "cbor":
-				marshalled, err = cbor.Marshal(result)
-			case "yaml":
-				marshalled, err = yaml.Marshal(result)
-			case "toml":
-				if k := reflect.TypeOf(result).Kind(); k != reflect.Map {
-					err = fmt.Errorf("TOML only supports maps but found %s", k.String())
-				} else {
-					t, err := toml.TreeFromMap(result.(map[string]interface{}))
-					if err == nil {
-						marshalled = []byte(t.String())
-					}
-				}
-			case "shorthand":
-				marshalled = []byte(shorthand.MarshalPretty(result))
-			}
+			marshalled, err := marshalOutput(result, *format)
 
 			if err != nil {
-				panic(err)
+				fmt.Println(err)
+				os.Exit(1)
 			}
 
 			fmt.Println(string(marshalled))
@@ -102,5 +114,8 @@ func main() {
 	verbose = cmd.Flags().BoolP("verbose", "v", false, "Enable verbose output")
 	query = cmd.Flags().StringP("query", "q", "", "Path to query")
 
-	cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 }

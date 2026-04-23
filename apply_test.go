@@ -250,6 +250,22 @@ var applyExamples = []struct {
 		JSON:  `{"foo": [1, 3, 4]}`,
 	},
 	{
+		Name: "Unset array item out of bounds positive",
+		Existing: map[string]interface{}{
+			"foo": []interface{}{1, 2, 3, 4},
+		},
+		Input: "{foo[10]: undefined}",
+		JSON:  `{"foo": [1, 2, 3, 4]}`,
+	},
+	{
+		Name: "Unset array item out of bounds negative",
+		Existing: map[string]interface{}{
+			"foo": []interface{}{1, 2, 3, 4},
+		},
+		Input: "{foo[-10]: undefined}",
+		JSON:  `{"foo": [1, 2, 3, 4]}`,
+	},
+	{
 		Name: "Move property",
 		Existing: map[string]interface{}{
 			"foo": "hello",
@@ -274,6 +290,27 @@ var applyExamples = []struct {
 		Input: "{bar ^ foo[0]}",
 		JSON:  `{"bar": 1, "foo": [2, 3]}`,
 	},
+}
+
+func TestApplyInvalidSwapValue(t *testing.T) {
+	d := NewDocument(ParseOptions{})
+	_, err := d.Apply(nil)
+	require.NoError(t, err)
+
+	// Construct a swap operation with a non-string value; Apply should return
+	// an error rather than panic.
+	d.Operations = []Operation{{Kind: OpSwap, Path: "a", Value: 42}}
+	_, err = d.Apply(map[string]any{"a": 1, "b": 2})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "swap operation value must be a path string")
+}
+
+func TestApplyUnknownOpKind(t *testing.T) {
+	d := NewDocument(ParseOptions{})
+	d.Operations = []Operation{{Kind: OpKind(99), Path: "a", Value: 1}}
+	_, err := d.Apply(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown operation kind")
 }
 
 func TestApply(t *testing.T) {
