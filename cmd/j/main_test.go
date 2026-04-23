@@ -114,3 +114,15 @@ func TestIsStdinPipedStatError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestCommandNameUsesBaseName(t *testing.T) {
+	if got := commandName("/tmp/go-build/some/path/j"); got != "j" {
+		t.Fatalf("expected basename, got %q", got)
+	}
+}
+
+func TestCommandNameFallsBackToJ(t *testing.T) {
+	if got := commandName(""); got != "j" {
+		t.Fatalf("expected fallback name, got %q", got)
+	}
+}

@@ -538,7 +538,7 @@ func (d *Document) getFields(input any) (any, Error) {
 			}
 		}
 		if r == -1 {
-			break
+			return nil, d.error(1, "expected '}' to close field selection")
 		}
 		if r == '[' {
 			d.buf.WriteRune(r)

@@ -334,6 +334,12 @@ var getExamples = []struct {
 		Query: `{id`,
 		Error: "field selection requires a map",
 	},
+	{
+		Name:  "Field select unclosed on map",
+		Input: `{"id": 1}`,
+		Query: `{id`,
+		Error: "expected '}' to close field selection",
+	},
 }
 
 func TestGet(t *testing.T) {

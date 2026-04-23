@@ -89,7 +89,7 @@ It seems reasonable to ask, why create a new syntax?
 You can use the included `j` executable to try out the shorthand format examples below. Examples are shown in JSON, but the shorthand parses into structured data that can be marshalled as other formats, like YAML or TOML if you prefer.
 
 ```sh
-go get -u github.com/danielgtaylor/shorthand/cmd/j
+go install github.com/danielgtaylor/shorthand/cmd/j@latest
 ```
 
 Also feel free to use this tool to generate structured data for input to other commands.
@@ -481,11 +481,11 @@ $ j <data.json -q 'users[friends contains b].id'
 $ j <data.json -q 'users[friends contains b].{id, age}'
 [
   {
-    "age": null,
+    "age": 5,
     "id": 1
   },
   {
-    "age": null,
+    "age": 6,
     "id": 2
   }
 ]
@@ -599,5 +599,6 @@ The file `get.go` provides an implementation of query parsing. It also utilizes 
 No special steps are necessary to test local changes to the grammar. You can just run the included `j` utility to test:
 
 ```sh
-$ go run ./cmd/j your: new feature here
+$ cd cmd/j
+$ go run . your: new feature here
 ```

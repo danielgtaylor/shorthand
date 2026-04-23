@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/danielgtaylor/shorthand/v2"
@@ -54,17 +55,25 @@ func marshalOutput(result any, format string) ([]byte, error) {
 	}
 }
 
+func commandName(args0 string) string {
+	if base := filepath.Base(args0); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
+	}
+	return "j"
+}
+
 func main() {
 	var format *string
 	var verbose *bool
 	var query *string
 
 	var debugLog func(string, ...any)
+	name := commandName(os.Args[0])
 
 	cmd := &cobra.Command{
-		Use:     fmt.Sprintf("%s [flags] key1: value1, key2: value2, ...", os.Args[0]),
+		Use:     fmt.Sprintf("%s [flags] key1: value1, key2: value2, ...", name),
 		Short:   "Generate shorthand structured data",
-		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", os.Args[0]),
+		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", name),
 		Run: func(cmd *cobra.Command, args []string) {
 			stdinPiped, err := isStdinPiped(os.Stdin)
 			if err != nil {
