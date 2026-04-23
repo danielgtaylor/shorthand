@@ -68,19 +68,19 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			stdinPiped, err := isStdinPiped(os.Stdin)
 			if err != nil {
-				fmt.Printf("Unable to inspect stdin: %v\n", err)
+				cmd.PrintErrf("Unable to inspect stdin: %v\n", err)
 				os.Exit(1)
 			}
 			if len(args) == 0 && *query == "" && !stdinPiped {
-				fmt.Println("At least one arg or --query need to be passed")
+				cmd.PrintErrln("At least one arg or --query must be provided")
 				os.Exit(1)
 			}
 			if *verbose {
 				debugLog = func(format string, a ...any) {
-					fmt.Printf(format, a...)
-					fmt.Println()
+					cmd.PrintErrf(format, a...)
+					cmd.PrintErrln()
 				}
-				fmt.Printf("Input: %s\n", strings.Join(args, " "))
+				cmd.PrintErrf("Input: %s\n", strings.Join(args, " "))
 			}
 			result, isStructured, err := shorthand.GetInput(args, shorthand.ParseOptions{
 				EnableFileInput:       true,
@@ -90,15 +90,15 @@ func main() {
 			})
 			if err != nil {
 				if e, ok := err.(shorthand.Error); ok {
-					fmt.Println(e.Pretty())
+					cmd.PrintErrln(e.Pretty())
 					os.Exit(1)
 				} else {
-					fmt.Println(err)
+					cmd.PrintErrln(err)
 					os.Exit(1)
 				}
 			}
 			if !isStructured {
-				fmt.Println("Input file could not be parsed as structured data")
+				cmd.PrintErrln("Input file could not be parsed as structured data")
 				os.Exit(1)
 			}
 
@@ -106,10 +106,10 @@ func main() {
 				if selected, ok, err := shorthand.GetPath(*query, result, shorthand.GetOptions{DebugLogger: debugLog}); ok {
 					result = selected
 				} else if err != nil {
-					fmt.Println(err.Pretty())
+					cmd.PrintErrln(err.Pretty())
 					os.Exit(1)
 				} else {
-					fmt.Println("No match")
+					cmd.PrintErrln("No match")
 					return
 				}
 			}
@@ -117,7 +117,7 @@ func main() {
 			marshalled, err := marshalOutput(result, *format)
 
 			if err != nil {
-				fmt.Println(err)
+				cmd.PrintErrln(err)
 				os.Exit(1)
 			}
 
@@ -130,7 +130,7 @@ func main() {
 	query = cmd.Flags().StringP("query", "q", "", "Path to query")
 
 	if err := cmd.Execute(); err != nil {
-		fmt.Println(err)
+		cmd.PrintErrln(err)
 		os.Exit(1)
 	}
 }
