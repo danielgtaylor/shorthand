@@ -18,7 +18,7 @@ type ParseOptions struct {
 	EnableFileInput bool
 
 	// EnableObjectDetection will enable omitting the outer `{` and `}` for
-	// objects, which can be useful for some applications such as command line
+	// objects, which can be useful for some applications such as command-line
 	// arguments.
 	EnableObjectDetection bool
 
@@ -36,7 +36,7 @@ type ParseOptions struct {
 	ForceFloat64Numbers bool
 
 	// DebugLogger sets a function to be used for printing out debug information.
-	DebugLogger func(format string, a ...interface{})
+	DebugLogger func(format string, a ...any)
 }
 
 type Operation struct {
@@ -48,11 +48,12 @@ type Operation struct {
 type Document struct {
 	Operations []Operation
 
-	options    ParseOptions
-	expression string
-	pos        uint
-	lastWidth  uint
-	buf        bytes.Buffer
+	options           ParseOptions
+	expression        string
+	pos               uint
+	lastWidth         uint
+	autoWrappedObject bool
+	buf               bytes.Buffer
 }
 
 func NewDocument(options ParseOptions) *Document {
@@ -64,6 +65,7 @@ func NewDocument(options ParseOptions) *Document {
 func (d *Document) Parse(input string) Error {
 	d.expression = input
 	d.pos = 0
+	d.autoWrappedObject = false
 
 	if d.options.EnableObjectDetection {
 		// Try and determine if this is actually an object without the outer
@@ -78,9 +80,11 @@ func (d *Document) Parse(input string) Error {
 			if r == ':' || r == '^' {
 				// We have found an object! Wrap it and continue.
 				d.expression = "{" + input + "}"
+				d.autoWrappedObject = true
 				if d.options.DebugLogger != nil {
 					d.options.DebugLogger("Detected object, wrapping in { and }")
 				}
+				break
 			}
 		}
 		d.pos = 0
@@ -93,7 +97,7 @@ func (d *Document) Parse(input string) Error {
 	d.skipWhitespace()
 	d.skipComments(d.peek())
 	if !d.expect(-1) {
-		return d.error(1, "Expected EOF but found additional input: "+string(d.expression[d.pos]))
+		return d.error(1, "Expected EOF but found additional input: %s", runeStr(d.peek()))
 	}
 	return nil
 }

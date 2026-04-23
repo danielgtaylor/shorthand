@@ -156,16 +156,56 @@ func (d *Document) skipWhitespace() {
 
 func (d *Document) skipComments(r rune) bool {
 	if r == '/' && d.peek() == '/' {
-		for {
-			r = d.next()
-			if r == -1 || r == '\n' {
-				break
-			}
-		}
+		d.consumeLineComment()
 		d.skipWhitespace()
 		return true
 	}
 	return false
+}
+
+func (d *Document) consumeLineComment() {
+	d.next()
+	for {
+		if d.autoWrappedObject && d.pos == uint(len(d.expression))-1 {
+			break
+		}
+		r := d.next()
+		if r == -1 || r == '\n' {
+			break
+		}
+	}
+}
+
+func endsWithWhitespace(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return unicode.IsSpace(r)
+}
+
+func canEndValueBeforeComment(value string, forceFloat bool) bool {
+	if value == "" {
+		return false
+	}
+
+	if value == "undefined" {
+		return true
+	}
+
+	if strings.HasPrefix(value, "@") && len(value) > 1 {
+		return true
+	}
+
+	if strings.HasPrefix(value, "%") {
+		if _, err := base64.StdEncoding.DecodeString(value[1:]); err == nil {
+			return true
+		}
+	}
+
+	_, ok := coerceValue(value, forceFloat)
+	return ok
 }
 
 // getu4 decodes \uXXXX from the beginning of s, returning the hex value,
@@ -219,7 +259,7 @@ func (d *Document) parseEscape(quoted bool, includeEscape bool) bool {
 		d.buf.WriteRune(replace)
 		return true
 	}
-	if (peek == 'u' || peek == 'U') && len(d.expression) >= int(d.pos)+5 {
+	if peek == 'u' && len(d.expression) >= int(d.pos)+5 {
 		r := getu4([]byte(d.expression[d.pos-1:]))
 		if r >= 0 {
 			b := make([]byte, 4)
@@ -280,7 +320,7 @@ func (d *Document) parseIndex() Error {
 	for {
 		r := d.next()
 
-		if (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '^' {
+		if (r >= '0' && r <= '9') || r == '-' || r == '^' {
 			d.buf.WriteRune(r)
 			continue
 		}
@@ -441,13 +481,118 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 	canSlice := true
 	first := true
 
+	finishValue := func(value string) Error {
+		if coerce && len(value) > 0 {
+			if d.options.EnableFileInput && strings.HasPrefix(value, "@") && len(value) > 1 {
+				filename := value[1:]
+
+				if d.options.DebugLogger != nil {
+					d.options.DebugLogger("Found file %s", filename)
+				}
+
+				data, err := os.ReadFile(filename)
+				if err != nil {
+					return d.error(uint(len(value)), "Unable to read file: %v", err)
+				}
+
+				if strings.HasSuffix(filename, ".json") {
+					var structured any
+					if err := json.Unmarshal(data, &structured); err != nil {
+						return d.error(uint(len(value)), "Unable to unmarshal JSON: %v", err)
+					}
+					if d.options.DebugLogger != nil {
+						d.options.DebugLogger("Parse value: %v", structured)
+					}
+					d.Operations = append(d.Operations, Operation{
+						Kind:  OpSet,
+						Path:  path,
+						Value: structured,
+					})
+					return nil
+				} else if strings.HasSuffix(filename, ".cbor") {
+					var structured any
+					if err := cbor.Unmarshal(data, &structured); err != nil {
+						return d.error(uint(len(value)), "Unable to unmarshal CBOR: %v", err)
+					}
+
+					if d.options.ForceStringKeys {
+						structured = ConvertMapString(structured)
+					}
+					if d.options.DebugLogger != nil {
+						d.options.DebugLogger("Parse value: %v", structured)
+					}
+					d.Operations = append(d.Operations, Operation{
+						Kind:  OpSet,
+						Path:  path,
+						Value: structured,
+					})
+					return nil
+				} else if utf8.Valid(data) {
+					value = string(data)
+				} else {
+					if d.options.DebugLogger != nil {
+						d.options.DebugLogger("Parse value: %v", data)
+					}
+					d.Operations = append(d.Operations, Operation{
+						Kind:  OpSet,
+						Path:  path,
+						Value: data,
+					})
+					return nil
+				}
+			} else if strings.HasPrefix(value, "%") {
+				binary, err := base64.StdEncoding.DecodeString(value[1:])
+				if err != nil {
+					return d.error(uint(len(value)), "Unable to Base64 decode: %v", err)
+				}
+				if d.options.DebugLogger != nil {
+					d.options.DebugLogger("Parse value: %v", binary)
+				}
+				d.Operations = append(d.Operations, Operation{
+					Kind:  OpSet,
+					Path:  path,
+					Value: binary,
+				})
+				return nil
+			} else {
+				if value == "undefined" {
+					if d.options.DebugLogger != nil {
+						d.options.DebugLogger("Unsetting value")
+					}
+					d.Operations = append(d.Operations, Operation{
+						Kind: OpDelete,
+						Path: path,
+					})
+					return nil
+				}
+
+				if coerced, ok := coerceValue(value, d.options.ForceFloat64Numbers); ok {
+					if d.options.DebugLogger != nil {
+						d.options.DebugLogger("Parse value: %v", coerced)
+					}
+					d.Operations = append(d.Operations, Operation{
+						Kind:  OpSet,
+						Path:  path,
+						Value: coerced,
+					})
+					return nil
+				}
+			}
+		}
+
+		if d.options.DebugLogger != nil {
+			d.options.DebugLogger("Parse value: " + value)
+		}
+		d.Operations = append(d.Operations, Operation{
+			Kind:  OpSet,
+			Path:  path,
+			Value: value,
+		})
+		return nil
+	}
+
 	for {
 		r := d.next()
-
-		if d.skipComments(r) {
-			canSlice = false
-			continue
-		}
 
 		if r == '\\' {
 			if d.parseEscape(false, false) {
@@ -537,6 +682,27 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 		}
 		first = false
 
+		if r == '/' && d.peek() == '/' {
+			var rawValue string
+			if canSlice {
+				rawValue = d.expression[start : d.pos-1]
+			} else {
+				rawValue = d.buf.String()
+			}
+			value := strings.TrimSpace(rawValue)
+			if value == "" {
+				d.skipComments(r)
+				canSlice = true
+				start = d.pos
+				first = true
+				continue
+			}
+			if endsWithWhitespace(rawValue) || canEndValueBeforeComment(value, d.options.ForceFloat64Numbers) {
+				d.skipComments(r)
+				return finishValue(value)
+			}
+		}
+
 		if r == -1 || r == '\n' || r == '}' || r == ']' || (terminateComma && r == ',') {
 			if r == '\n' {
 				d.skipWhitespace()
@@ -550,113 +716,7 @@ func (d *Document) parseValue(path string, coerce bool, terminateComma bool) Err
 				value = strings.TrimSpace(d.buf.String())
 			}
 
-			if coerce && len(value) > 0 {
-				if d.options.EnableFileInput && strings.HasPrefix(value, "@") && len(value) > 1 {
-					filename := value[1:]
-
-					if d.options.DebugLogger != nil {
-						d.options.DebugLogger("Found file %s", filename)
-					}
-
-					data, err := os.ReadFile(filename)
-					if err != nil {
-						return d.error(uint(len(value)), "Unable to read file: %v", err)
-					}
-
-					if strings.HasSuffix(filename, ".json") {
-						var structured any
-						if err := json.Unmarshal(data, &structured); err != nil {
-							return d.error(uint(len(value)), "Unable to unmarshal JSON: %v", err)
-						}
-						if d.options.DebugLogger != nil {
-							d.options.DebugLogger("Parse value: %v", structured)
-						}
-						d.Operations = append(d.Operations, Operation{
-							Kind:  OpSet,
-							Path:  path,
-							Value: structured,
-						})
-						break
-					} else if strings.HasSuffix(filename, ".cbor") {
-						var structured any
-						if err := cbor.Unmarshal(data, &structured); err != nil {
-							return d.error(uint(len(value)), "Unable to unmarshal CBOR: %v", err)
-						}
-
-						if d.options.ForceStringKeys {
-							structured = ConvertMapString(structured)
-						}
-						if d.options.DebugLogger != nil {
-							d.options.DebugLogger("Parse value: %v", structured)
-						}
-						d.Operations = append(d.Operations, Operation{
-							Kind:  OpSet,
-							Path:  path,
-							Value: structured,
-						})
-						break
-					} else if utf8.Valid(data) {
-						value = string(data)
-					} else {
-						if d.options.DebugLogger != nil {
-							d.options.DebugLogger("Parse value: %v", data)
-						}
-						d.Operations = append(d.Operations, Operation{
-							Kind:  OpSet,
-							Path:  path,
-							Value: data,
-						})
-						break
-					}
-				} else if strings.HasPrefix(value, "%") {
-					binary, err := base64.StdEncoding.DecodeString(value[1:])
-					if err != nil {
-						return d.error(uint(len(value)), "Unable to Base64 decode: %v", err)
-					}
-					if d.options.DebugLogger != nil {
-						d.options.DebugLogger("Parse value: %v", binary)
-					}
-					d.Operations = append(d.Operations, Operation{
-						Kind:  OpSet,
-						Path:  path,
-						Value: binary,
-					})
-					break
-				} else {
-					if value == "undefined" {
-						if d.options.DebugLogger != nil {
-							d.options.DebugLogger("Unsetting value")
-						}
-						d.Operations = append(d.Operations, Operation{
-							Kind: OpDelete,
-							Path: path,
-						})
-						break
-					}
-
-					if coerced, ok := coerceValue(value, d.options.ForceFloat64Numbers); ok {
-						if d.options.DebugLogger != nil {
-							d.options.DebugLogger("Parse value: %v", coerced)
-						}
-						d.Operations = append(d.Operations, Operation{
-							Kind:  OpSet,
-							Path:  path,
-							Value: coerced,
-						})
-						break
-					}
-				}
-			}
-
-			if d.options.DebugLogger != nil {
-				d.options.DebugLogger("Parse value: " + value)
-			}
-			d.Operations = append(d.Operations, Operation{
-				Kind:  OpSet,
-				Path:  path,
-				Value: value,
-			})
-			break
+			return finishValue(value)
 		}
 
 		d.buf.WriteRune(r)

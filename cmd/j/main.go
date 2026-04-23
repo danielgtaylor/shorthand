@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 
 	"github.com/danielgtaylor/shorthand/v2"
@@ -13,6 +12,47 @@ import (
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 )
+
+type stdinStatter interface {
+	Stat() (os.FileInfo, error)
+}
+
+func isStdinPiped(stdin stdinStatter) (bool, error) {
+	stat, err := stdin.Stat()
+	if err != nil {
+		return false, err
+	}
+	return (stat.Mode() & os.ModeCharDevice) == 0, nil
+}
+
+func marshalOutput(result any, format string) ([]byte, error) {
+	switch format {
+	case "json":
+		return json.MarshalIndent(result, "", "  ")
+	case "cbor":
+		return cbor.Marshal(result)
+	case "yaml":
+		return yaml.Marshal(result)
+	case "toml":
+		if result == nil {
+			return nil, fmt.Errorf("TOML only supports maps but found null")
+		}
+		converted := shorthand.ConvertMapString(result)
+		m, ok := converted.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("TOML only supports maps but found %T", result)
+		}
+		t, err := toml.TreeFromMap(m)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(t.String()), nil
+	case "shorthand":
+		return []byte(shorthand.MarshalPretty(result)), nil
+	default:
+		return nil, fmt.Errorf("unsupported format %q", format)
+	}
+}
 
 func main() {
 	var format *string
@@ -26,16 +66,21 @@ func main() {
 		Short:   "Generate shorthand structured data",
 		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", os.Args[0]),
 		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) == 0 && *query == "" {
-				fmt.Println("At least one arg or --query need to be passed")
+			stdinPiped, err := isStdinPiped(os.Stdin)
+			if err != nil {
+				cmd.PrintErrf("Unable to inspect stdin: %v\n", err)
+				os.Exit(1)
+			}
+			if len(args) == 0 && *query == "" && !stdinPiped {
+				cmd.PrintErrln("At least one arg or --query must be provided")
 				os.Exit(1)
 			}
 			if *verbose {
-				debugLog = func(format string, a ...interface{}) {
-					fmt.Printf(format, a...)
-					fmt.Println()
+				debugLog = func(format string, a ...any) {
+					cmd.PrintErrf(format, a...)
+					cmd.PrintErrln()
 				}
-				fmt.Printf("Input: %s\n", strings.Join(args, " "))
+				cmd.PrintErrf("Input: %s\n", strings.Join(args, " "))
 			}
 			result, isStructured, err := shorthand.GetInput(args, shorthand.ParseOptions{
 				EnableFileInput:       true,
@@ -45,14 +90,15 @@ func main() {
 			})
 			if err != nil {
 				if e, ok := err.(shorthand.Error); ok {
-					fmt.Println(e.Pretty())
+					cmd.PrintErrln(e.Pretty())
 					os.Exit(1)
 				} else {
-					panic(err)
+					cmd.PrintErrln(err)
+					os.Exit(1)
 				}
 			}
 			if !isStructured {
-				fmt.Println("Input file could not be parsed as structured data")
+				cmd.PrintErrln("Input file could not be parsed as structured data")
 				os.Exit(1)
 			}
 
@@ -60,38 +106,19 @@ func main() {
 				if selected, ok, err := shorthand.GetPath(*query, result, shorthand.GetOptions{DebugLogger: debugLog}); ok {
 					result = selected
 				} else if err != nil {
-					fmt.Println(err.Pretty())
+					cmd.PrintErrln(err.Pretty())
 					os.Exit(1)
 				} else {
-					fmt.Println("No match")
+					cmd.PrintErrln("No match")
 					return
 				}
 			}
 
-			var marshalled []byte
-
-			switch *format {
-			case "json":
-				marshalled, err = json.MarshalIndent(result, "", "  ")
-			case "cbor":
-				marshalled, err = cbor.Marshal(result)
-			case "yaml":
-				marshalled, err = yaml.Marshal(result)
-			case "toml":
-				if k := reflect.TypeOf(result).Kind(); k != reflect.Map {
-					err = fmt.Errorf("TOML only supports maps but found %s", k.String())
-				} else {
-					t, err := toml.TreeFromMap(result.(map[string]interface{}))
-					if err == nil {
-						marshalled = []byte(t.String())
-					}
-				}
-			case "shorthand":
-				marshalled = []byte(shorthand.MarshalPretty(result))
-			}
+			marshalled, err := marshalOutput(result, *format)
 
 			if err != nil {
-				panic(err)
+				cmd.PrintErrln(err)
+				os.Exit(1)
 			}
 
 			fmt.Println(string(marshalled))
@@ -102,5 +129,8 @@ func main() {
 	verbose = cmd.Flags().BoolP("verbose", "v", false, "Enable verbose output")
 	query = cmd.Flags().StringP("query", "q", "", "Path to query")
 
-	cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		cmd.PrintErrln(err)
+		os.Exit(1)
+	}
 }

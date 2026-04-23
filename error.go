@@ -54,6 +54,9 @@ func (e *exprErr) Pretty() string {
 		start = len(*e.source) - 1
 	}
 
+	if start < 0 {
+		start = 0
+	}
 	lineStart := 0
 	lines := 0
 	for start > 0 {
