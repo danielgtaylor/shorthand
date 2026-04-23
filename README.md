@@ -183,7 +183,7 @@ Shorthand supports the standard JSON types, but adds some of its own as well to 
 | `number`  | JSON number, e.g. `1`, `2.5`, or `1.4e5`                         |
 | `string`  | Quoted or unquoted strings, e.g. `hello` or `"hello"`            |
 | `bytes`   | `%`-prefixed, unquoted, base64-encoded binary data, e.g. `%wg==` |
-| `time`    | Date/time in ISO8601, e.g. `2022-01-01T12:00:00Z`                |
+| `time`    | RFC3339 date/time, e.g. `2022-01-01T12:00:00Z`                   |
 | `array`   | JSON array, e.g. `[1, 2, 3]`                                     |
 | `object`  | JSON object, e.g. `{"hello": "world"}`                           |
 
@@ -398,7 +398,7 @@ The query language supports:
 
 - Paths for objects & arrays `foo.items.name`
 - Wildcards for unknown props `foo.*.name`
-- Array indexing & slicing `foo.items[1:2].name`
+- Array indexing & slicing `foo.items[1:2].name` (both ends inclusive: `[1:2]` returns items at indexes 1 and 2)
   - Including negative indexes `foo.items[-1].name`
 - Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
 - Object property selection `foo.{created, names: items.name}`
@@ -491,6 +491,8 @@ $ j <data.json -q 'users[friends contains b].{id, age}'
 ]
 ```
 
+> **Note on slice ranges:** Shorthand uses inclusive ranges on both ends, so `[1:2]` returns items at indexes 1 **and** 2. This is an intentional design choice: shorthand is meant to be intuitive for query use, where "items 1 to 2" naturally means both endpoints. Dijkstra's classic argument for exclusive end ranges (empty range, length arithmetic, concatenation) applies to programming with ranges, not to querying. Users familiar with jq or JMESPath (which use exclusive end) need only remember this one difference.
+
 ## Library Usage
 
 Aside from `Marshal` and `Unmarshal` functions, the `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments for CLI applications:
@@ -500,13 +502,21 @@ package main
 
 import (
   "fmt"
+  "os"
+
   "github.com/danielgtaylor/shorthand/v2"
 )
 
 func main() {
-  result, err := shorthand.GetInput(os.Args[1:])
+  result, isStructured, err := shorthand.GetInput(os.Args[1:], shorthand.ParseOptions{
+    EnableFileInput:       true,
+    EnableObjectDetection: true,
+  })
   if err != nil {
     panic(err)
+  }
+  if !isStructured {
+    panic("input is not structured data")
   }
 
   fmt.Println(result)
@@ -582,7 +592,7 @@ foo.bar{id: 1, tags: [{value: a}, {value: b}]}
   "foo": {
     "bar": {
       "id": 1,
-      "tags: [
+      "tags": [
         {"value": "a"},
         {"value": "b"}
       ]

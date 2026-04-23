@@ -62,13 +62,7 @@ func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options Pars
 			return nil, false, ErrInvalidFile
 		}
 
-		result, err := Unmarshal(string(d), ParseOptions{
-			EnableFileInput:       options.EnableFileInput,
-			EnableObjectDetection: options.EnableObjectDetection,
-			ForceStringKeys:       options.ForceStringKeys,
-			ForceFloat64Numbers:   options.ForceFloat64Numbers,
-			DebugLogger:           options.DebugLogger,
-		}, nil)
+		result, err := Unmarshal(string(d), options, nil)
 		if err != nil {
 			return nil, false, err
 		}
