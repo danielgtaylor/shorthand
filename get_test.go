@@ -53,7 +53,13 @@ var getExamples = []struct {
 		Name:  "Nested fields empty array",
 		Input: `{"f1": []}`,
 		Query: `f1.f2.f3`,
-		Go:    nil,
+		Go:    []any{},
+	},
+	{
+		Name:  "Array item null field preserved",
+		Input: `{"items": [{"id": 1}, {"id": null}, {"other": 2}]}`,
+		Query: `items.id`,
+		Go:    []any{1.0, nil},
 	},
 	{
 		Name:  "Wildcard fields",
@@ -152,6 +158,18 @@ var getExamples = []struct {
 		Go:    "hello",
 	},
 	{
+		Name:  "Index string unicode",
+		Input: `{"field": "a😈b"}`,
+		Query: `field[1]`,
+		Go:    "😈",
+	},
+	{
+		Name:  "Slice string unicode",
+		Input: `{"field": "a😈b"}`,
+		Query: `field[1:]`,
+		Go:    "😈b",
+	},
+	{
 		Name:  "Index bytes",
 		Input: map[string]any{"field": []byte("hello")},
 		Query: `field[1]`,
@@ -228,6 +246,12 @@ var getExamples = []struct {
 		Input: `{"link": {"a": true}}`,
 		Query: `link.{\u0061}`,
 		Go:    map[string]any{"a": true},
+	},
+	{
+		Name:  "Field selection quoted special chars",
+		Input: `{"link": {"foo.bar": 1, "other": 2}}`,
+		Query: `link.{"foo.bar"}`,
+		Go:    map[string]any{"foo.bar": 1.0},
 	},
 	{
 		Name: "Field selection map any",
@@ -346,6 +370,39 @@ func TestGet(t *testing.T) {
 	}
 }
 
+// TestGetPathFound verifies the found return value in edge cases.
+func TestGetPathFound(t *testing.T) {
+	data := map[string]any{
+		"a": map[string]any{"id": 1},
+		"b": map[string]any{"id": nil},
+		"c": []any{
+			map[string]any{"id": 10},
+			map[string]any{"id": nil},
+		},
+	}
+
+	// Empty path: returns input with found=false (no path was evaluated).
+	_, found, err := GetPath("", data, GetOptions{})
+	require.NoError(t, err)
+	assert.False(t, found, "empty path should return found=false")
+
+	// Present field: found=true.
+	_, found, err = GetPath("a.id", data, GetOptions{})
+	require.NoError(t, err)
+	assert.True(t, found)
+
+	// Missing field: found=false.
+	_, found, err = GetPath("a.missing", data, GetOptions{})
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// Recursive descent returns found=true when results exist.
+	result, found, err := GetPath("..id", data, GetOptions{})
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.NotEmpty(t, result)
+}
+
 var getBenchInput = map[string]any{
 	"items": []any{
 		0,
@@ -365,52 +422,6 @@ var getBenchInput = map[string]any{
 		},
 	},
 }
-
-// func BenchmarkGetJMESPathSimple(b *testing.B) {
-// 	b.ReportAllocs()
-
-// 	query := "items[1].name"
-
-// 	out, err := jmespath.Search(query, getBenchInput)
-// 	require.NoError(b, err)
-// 	require.Equal(b, "Item 1", out)
-
-// 	for n := 0; n < b.N; n++ {
-// 		jmespath.Search(query, getBenchInput)
-// 	}
-// }
-
-// func BenchmarkGetJMESPath(b *testing.B) {
-// 	b.ReportAllocs()
-
-// 	query := "items[-1].{name: name, price: price, f: tags[?starts_with(@, `\"f\"`)]}"
-
-// 	out, err := jmespath.Search(query, getBenchInput)
-// 	require.NoError(b, err)
-// 	require.Equal(b, map[string]any{
-// 		"name":  "Item 2",
-// 		"price": 1.50,
-// 		"f":     []any{"four", "five"},
-// 	}, out)
-
-// 	for n := 0; n < b.N; n++ {
-// 		jmespath.Search(query, getBenchInput)
-// 	}
-// }
-
-// func BenchmarkGetJMESPathFlatten(b *testing.B) {
-// 	b.ReportAllocs()
-
-// 	query := "items[].tags|[]"
-
-// 	out, err := jmespath.Search(query, getBenchInput)
-// 	require.NoError(b, err)
-// 	require.Equal(b, []any{"one", "two", "three", "four", "five", "six"}, out)
-
-// 	for n := 0; n < b.N; n++ {
-// 		GetPath(query, getBenchInput, GetOptions{})
-// 	}
-// }
 
 func BenchmarkGetPathSimple(b *testing.B) {
 	b.ReportAllocs()

@@ -2,6 +2,7 @@ package shorthand
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"strings"
@@ -105,6 +106,11 @@ var marshalExamples = []struct {
 		Output: "true",
 	},
 	{
+		Name:   "Empty map",
+		Input:  map[string]any{},
+		Output: "{}",
+	},
+	{
 		Name: "Simple object",
 		Input: map[string]any{
 			"foo": "bar",
@@ -190,6 +196,20 @@ var marshalExamples = []struct {
 		},
 		Output: "long: @file, multi: @file",
 	},
+	{
+		Name: "Quoted reserved key",
+		Input: map[string]any{
+			"a.b": 1,
+		},
+		Output: `"a.b": 1`,
+	},
+	{
+		Name: "Quoted reserved value",
+		Input: map[string]any{
+			"v": "a,b",
+		},
+		Output: `v: "a,b"`,
+	},
 }
 
 func TestMarshal(t *testing.T) {
@@ -228,6 +248,53 @@ func TestMarshalPretty(t *testing.T) {
   }
   foo: 1
 }`, result)
+}
+func TestMarshalRoundTripReservedCharacters(t *testing.T) {
+	input := map[string]any{
+		"a.b":       1,
+		"a,b":       "x]y",
+		"prefix":    "@file",
+		"binary":    "%wg==",
+		"comment":   "// hello",
+		"space":     "  keep  ",
+		"undefined": "undefined",
+		"midslash":  "foo//bar",
+	}
+
+	marshalled := MarshalCLI(input)
+	result, err := Unmarshal(marshalled, ParseOptions{
+		EnableObjectDetection: true,
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, input, result)
+}
+
+func TestMarshalCLIEmptyMap(t *testing.T) {
+	out := MarshalCLI(map[string]any{})
+	assert.Equal(t, "{}", out)
+	result, err := Unmarshal(out, ParseOptions{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{}, result)
+}
+
+func TestQuoteStringFallbackOnMarshalError(t *testing.T) {
+	prev := marshalString
+	marshalString = func(any) ([]byte, error) {
+		return nil, errors.New("boom")
+	}
+	t.Cleanup(func() {
+		marshalString = prev
+	})
+
+	assert.Equal(t, "\"bad\ufffd\"", quoteString(string([]byte{'b', 'a', 'd', 0xff})))
+}
+
+func TestMarshalCLINonStringMapKeysStayUnquoted(t *testing.T) {
+	out := MarshalCLI(map[any]any{
+		1:   "one",
+		"2": "two",
+	})
+	assert.Equal(t, `1: one, "2": two`, out)
 }
 func TestUnmarshalCommentDisambiguation(t *testing.T) {
 	commentDT, err := time.Parse(time.RFC3339, "2025-04-03T15:19:22Z")
