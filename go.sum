@@ -1,5 +1,5 @@
-github.com/danielgtaylor/mexpr v1.9.0 h1:9ZDghCLBJ88ZTUkDn/cxyK4KmAJvStCEe+ECN2EoMa4=
-github.com/danielgtaylor/mexpr v1.9.0/go.mod h1:kAivYNRnBeE/IJinqBvVFvLrX54xX//9zFYwADo4Bc8=
+github.com/danielgtaylor/mexpr v1.10.0 h1:z0M1SVXP2y6Ikj/koUuZ/Rhinr91ONHBn0A580fDQho=
+github.com/danielgtaylor/mexpr v1.10.0/go.mod h1:kAivYNRnBeE/IJinqBvVFvLrX54xX//9zFYwADo4Bc8=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fxamacker/cbor/v2 v2.5.0 h1:oHsG0V/Q6E/wqTS2O1Cozzsy69nqCiguo5Q1a1ADivE=
