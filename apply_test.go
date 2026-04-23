@@ -313,6 +313,20 @@ func TestApplyUnknownOpKind(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown operation kind")
 }
 
+func TestApplyDeleteAppendIndexNoOp(t *testing.T) {
+	d := NewDocument(ParseOptions{})
+	err := d.Parse("{foo[]: undefined}")
+	require.NoError(t, err)
+
+	result, err := d.Apply(map[string]any{
+		"foo": []any{1, 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{
+		"foo": []any{1, 2},
+	}, result)
+}
+
 func TestApply(t *testing.T) {
 	for _, example := range applyExamples {
 		t.Run(example.Name, func(t *testing.T) {

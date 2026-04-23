@@ -13,6 +13,18 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
+type stdinStatter interface {
+	Stat() (os.FileInfo, error)
+}
+
+func isStdinPiped(stdin stdinStatter) (bool, error) {
+	stat, err := stdin.Stat()
+	if err != nil {
+		return false, err
+	}
+	return (stat.Mode() & os.ModeCharDevice) == 0, nil
+}
+
 func marshalOutput(result any, format string) ([]byte, error) {
 	switch format {
 	case "json":
@@ -54,8 +66,11 @@ func main() {
 		Short:   "Generate shorthand structured data",
 		Example: fmt.Sprintf("%s foo{bar: 1, baz: true}", os.Args[0]),
 		Run: func(cmd *cobra.Command, args []string) {
-			stat, _ := os.Stdin.Stat()
-			stdinPiped := (stat.Mode() & os.ModeCharDevice) == 0
+			stdinPiped, err := isStdinPiped(os.Stdin)
+			if err != nil {
+				fmt.Printf("Unable to inspect stdin: %v\n", err)
+				os.Exit(1)
+			}
 			if len(args) == 0 && *query == "" && !stdinPiped {
 				fmt.Println("At least one arg or --query need to be passed")
 				os.Exit(1)

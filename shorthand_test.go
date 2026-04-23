@@ -2,6 +2,7 @@ package shorthand
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"strings"
@@ -275,6 +276,26 @@ func TestMarshalCLIEmptyMap(t *testing.T) {
 	result, err := Unmarshal(out, ParseOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{}, result)
+}
+
+func TestQuoteStringFallbackOnMarshalError(t *testing.T) {
+	prev := marshalString
+	marshalString = func(any) ([]byte, error) {
+		return nil, errors.New("boom")
+	}
+	t.Cleanup(func() {
+		marshalString = prev
+	})
+
+	assert.Equal(t, "\"bad\ufffd\"", quoteString(string([]byte{'b', 'a', 'd', 0xff})))
+}
+
+func TestMarshalCLINonStringMapKeysStayUnquoted(t *testing.T) {
+	out := MarshalCLI(map[any]any{
+		1:   "one",
+		"2": "two",
+	})
+	assert.Equal(t, `1: one, "2": two`, out)
 }
 
 func TestUnmarshalCommentDisambiguation(t *testing.T) {

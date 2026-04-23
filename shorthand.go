@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -112,9 +113,14 @@ func (o MarshalOptions) GetSeparator(level int) string {
 	return "," + o.Spacer
 }
 
+var marshalString = json.Marshal
+
 func quoteString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
+	b, err := marshalString(s)
+	if err == nil {
+		return string(b)
+	}
+	return strconv.Quote(strings.ToValidUTF8(s, "\ufffd"))
 }
 
 func containsAnyRune(s string, chars string) bool {
@@ -150,6 +156,13 @@ func renderStringKey(s string) string {
 		return quoteString(s)
 	}
 	return s
+}
+
+func renderMapKey(k any) string {
+	if s, ok := k.(string); ok {
+		return renderStringKey(s)
+	}
+	return fmt.Sprintf("%v", k)
 }
 
 func Marshal(input any, options ...MarshalOptions) string {
@@ -191,11 +204,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 				dot = "."
 			}
 			for k := range v {
-				key := fmt.Sprintf("%v", k)
-				if s, ok := k.(string); ok {
-					key = renderStringKey(s)
-				}
-				return dot + key + renderValue(options, level, true, v[k])
+				return dot + renderMapKey(k) + renderValue(options, level, true, v[k])
 			}
 		}
 
@@ -212,13 +221,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 
 		var fields []string
 		for _, k := range keys {
-			var key string
-			if s, ok := k.(string); ok {
-				key = renderStringKey(s)
-			} else {
-				key = renderStringKey(fmt.Sprintf("%v", k))
-			}
-			fields = append(fields, key+renderValue(options, level+1, true, v[k]))
+			fields = append(fields, renderMapKey(k)+renderValue(options, level+1, true, v[k]))
 		}
 
 		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"

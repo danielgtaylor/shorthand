@@ -92,6 +92,9 @@ func (d *Document) applyIndex(input any, op Operation) (any, Error) {
 
 	s := input.([]any)
 	if appnd {
+		if op.Kind == OpDelete {
+			return s, nil
+		}
 		// Append (i.e. index equals length).
 		index = len(s)
 	} else if index < 0 {
