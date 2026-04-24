@@ -538,6 +538,18 @@ func TestGetPathCachedMalformedQueries(t *testing.T) {
 		require.Contains(t, err.Error(), "expected '}' to close field selection")
 	})
 
+	t.Run("field selection error at start has safe pretty offset", func(t *testing.T) {
+		_, _, err := GetPath(`{id}`, []any{1.0, 2.0}, GetOptions{})
+		require.Error(t, err)
+		require.Equal(t, uint(0), err.Offset())
+
+		var pretty string
+		require.NotPanics(t, func() {
+			pretty = err.Pretty()
+		})
+		assert.Contains(t, pretty, "{id}\n^")
+	})
+
 	t.Run("invalid filter remains invalid across reuse", func(t *testing.T) {
 		query := `items[1/0].id`
 
@@ -555,6 +567,37 @@ func TestGetPathCachedMalformedQueries(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot divide by zero")
 	})
+}
+
+func TestBoundedConcurrentCacheEvictsOldest(t *testing.T) {
+	cache := newBoundedConcurrentCache(2)
+
+	actual, loaded := cache.LoadOrStore("a", 1)
+	require.False(t, loaded)
+	assert.Equal(t, 1, actual)
+
+	actual, loaded = cache.LoadOrStore("b", 2)
+	require.False(t, loaded)
+	assert.Equal(t, 2, actual)
+
+	actual, loaded = cache.LoadOrStore("a", 10)
+	require.True(t, loaded)
+	assert.Equal(t, 1, actual)
+
+	actual, loaded = cache.LoadOrStore("c", 3)
+	require.False(t, loaded)
+	assert.Equal(t, 3, actual)
+
+	_, ok := cache.Load("a")
+	assert.False(t, ok)
+
+	actual, ok = cache.Load("b")
+	require.True(t, ok)
+	assert.Equal(t, 2, actual)
+
+	actual, ok = cache.Load("c")
+	require.True(t, ok)
+	assert.Equal(t, 3, actual)
 }
 
 func TestGetPathWildcardOrderingIsStable(t *testing.T) {

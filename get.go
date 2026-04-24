@@ -16,14 +16,64 @@ type fieldSpec struct {
 	path string
 }
 
+const defaultCompiledCacheMaxEntries = 1024
+
+type boundedConcurrentCache struct {
+	mu         sync.Mutex
+	maxEntries int
+	entries    map[string]any
+	order      []string
+}
+
+func newBoundedConcurrentCache(maxEntries int) *boundedConcurrentCache {
+	if maxEntries < 1 {
+		maxEntries = 1
+	}
+
+	return &boundedConcurrentCache{
+		maxEntries: maxEntries,
+		entries:    make(map[string]any, maxEntries),
+		order:      make([]string, 0, maxEntries),
+	}
+}
+
+func (c *boundedConcurrentCache) Load(key string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	value, ok := c.entries[key]
+	return value, ok
+}
+
+func (c *boundedConcurrentCache) LoadOrStore(key string, value any) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if cached, ok := c.entries[key]; ok {
+		return cached, true
+	}
+
+	if len(c.entries) >= c.maxEntries && len(c.order) > 0 {
+		evicted := c.order[0]
+		c.order = c.order[1:]
+		delete(c.entries, evicted)
+	}
+
+	c.entries[key] = value
+	c.order = append(c.order, key)
+	return value, false
+}
+
 // compiledPathCache memoizes parsed query plans keyed by the original query
 // string. Compiled queries are immutable after creation and safe to share
-// across goroutines.
-var compiledPathCache sync.Map
+// across goroutines. The cache is bounded to avoid unbounded memory growth in
+// long-lived processes that evaluate many distinct user-provided queries.
+var compiledPathCache = newBoundedConcurrentCache(defaultCompiledCacheMaxEntries)
 
 // mexprCache stores parsed filter ASTs keyed by expression string. The
-// resulting tree is read-only during execution so it is safe to share.
-var mexprCache sync.Map
+// resulting tree is read-only during execution so it is safe to share. The
+// cache is bounded for the same reason as compiledPathCache.
+var mexprCache = newBoundedConcurrentCache(defaultCompiledCacheMaxEntries)
 
 // compiledQuery is the internal prepared-query representation used by GetPath.
 // A query may contain multiple pipe-separated segments, each executed in order.
@@ -200,7 +250,7 @@ outer:
 			fields, _, err := d.parseFieldSpecs()
 			if err != nil {
 				ops = append(ops, compiledFieldsOp{
-					offset:   start - 1,
+					offset:   start,
 					parseErr: err,
 				})
 				break outer
@@ -219,7 +269,7 @@ outer:
 			}
 
 			ops = append(ops, compiledFieldsOp{
-				offset: start - 1,
+				offset: start,
 				fields: compiledFields,
 			})
 		case ',', ']', '}':

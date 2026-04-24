@@ -544,17 +544,17 @@ Shorthand v2 has been completely rewritten from the ground up, putting it at a s
 
 ```sh
 # Core parsing and formatting benchmarks
-BenchmarkMinJSON-12            740353    1438 ns/op    1808 B/op    31 allocs/op
-BenchmarkFormattedJSON-12      760250    1615 ns/op    1712 B/op    30 allocs/op
-BenchmarkShorthand-12          572709    2060 ns/op    1648 B/op    38 allocs/op
-BenchmarkPretty-12             536776    2248 ns/op    1648 B/op    38 allocs/op
-BenchmarkParse-12             1336264     883.2 ns/op   152 B/op    11 allocs/op
-BenchmarkApply-12             1000000    1201 ns/op    1493 B/op    27 allocs/op
+BenchmarkMinJSON-12            723205    1471 ns/op    1808 B/op    31 allocs/op
+BenchmarkFormattedJSON-12      715772    1684 ns/op    1712 B/op    30 allocs/op
+BenchmarkShorthand-12          569120    2160 ns/op    1648 B/op    38 allocs/op
+BenchmarkPretty-12             540336    2274 ns/op    1648 B/op    38 allocs/op
+BenchmarkParse-12             1342033     894.8 ns/op   152 B/op    11 allocs/op
+BenchmarkApply-12              985106    1248 ns/op    1493 B/op    27 allocs/op
 
 # Query benchmarks
-BenchmarkGetPathSimple-12     26290180      45.42 ns/op    0 B/op     0 allocs/op
-BenchmarkGetPath-12            3474639     339.4 ns/op   456 B/op     7 allocs/op
-BenchmarkGetPathFlatten-12     5275897     247.3 ns/op   320 B/op     6 allocs/op
+BenchmarkGetPathSimple-12     26379883      49.28 ns/op    0 B/op     0 allocs/op
+BenchmarkGetPath-12            3301216     345.3 ns/op   456 B/op     7 allocs/op
+BenchmarkGetPathFlatten-12     5693767     209.7 ns/op   320 B/op     6 allocs/op
 ```
 
 There is also a separate comparison benchmark module under `benchmarks/` that compares Shorthand query evaluation against Go implementations of JMESPath and jq.
