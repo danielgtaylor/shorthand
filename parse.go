@@ -439,8 +439,9 @@ func (d *Document) parseProp(path string, commaStop bool) (string, Error) {
 
 	var propName string
 	if canSlice {
-		// Subslice the expression directly — no allocation for the common case.
-		propName = strings.TrimRight(d.expression[propStart:d.pos], " \t\r\n\v\f")
+		// Subslice the expression directly and trim whitespace consistently with
+		// the buffered path, including Unicode whitespace.
+		propName = strings.TrimSpace(d.expression[propStart:d.pos])
 	} else {
 		propName = strings.TrimSpace(d.buf.String())
 	}

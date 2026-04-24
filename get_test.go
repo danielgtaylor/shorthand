@@ -571,6 +571,8 @@ func TestGetPathCachedMalformedQueries(t *testing.T) {
 
 func TestBoundedConcurrentCacheEvictsOldest(t *testing.T) {
 	cache := newBoundedConcurrentCache(2)
+	require.Len(t, cache.order, 2)
+	require.Equal(t, 2, cap(cache.order))
 
 	actual, loaded := cache.LoadOrStore("a", 1)
 	require.False(t, loaded)
@@ -598,6 +600,32 @@ func TestBoundedConcurrentCacheEvictsOldest(t *testing.T) {
 	actual, ok = cache.Load("c")
 	require.True(t, ok)
 	assert.Equal(t, 3, actual)
+
+	actual, loaded = cache.LoadOrStore("d", 4)
+	require.False(t, loaded)
+	assert.Equal(t, 4, actual)
+	assert.Len(t, cache.entries, 2)
+	assert.Len(t, cache.order, 2)
+	assert.Equal(t, 2, cap(cache.order))
+
+	_, ok = cache.Load("b")
+	assert.False(t, ok)
+}
+
+func TestCompiledFieldParseErrorKeepsOnlyQuerySource(t *testing.T) {
+	query, err := compilePath(`{id`)
+	require.NoError(t, err)
+	require.Len(t, query.segments, 1)
+	require.Len(t, query.segments[0].ops, 1)
+
+	op, ok := query.segments[0].ops[0].(compiledFieldsOp)
+	require.True(t, ok)
+	require.Error(t, op.parseErr)
+
+	exprErr, ok := op.parseErr.(*exprErr)
+	require.True(t, ok)
+	assert.Equal(t, `{id`, *exprErr.source)
+	assert.Contains(t, exprErr.Pretty(), "{id")
 }
 
 func TestGetPathWildcardOrderingIsStable(t *testing.T) {

@@ -23,6 +23,8 @@ type boundedConcurrentCache struct {
 	maxEntries int
 	entries    map[string]any
 	order      []string
+	head       int
+	count      int
 }
 
 func newBoundedConcurrentCache(maxEntries int) *boundedConcurrentCache {
@@ -33,7 +35,7 @@ func newBoundedConcurrentCache(maxEntries int) *boundedConcurrentCache {
 	return &boundedConcurrentCache{
 		maxEntries: maxEntries,
 		entries:    make(map[string]any, maxEntries),
-		order:      make([]string, 0, maxEntries),
+		order:      make([]string, maxEntries),
 	}
 }
 
@@ -53,14 +55,17 @@ func (c *boundedConcurrentCache) LoadOrStore(key string, value any) (any, bool) 
 		return cached, true
 	}
 
-	if len(c.entries) >= c.maxEntries && len(c.order) > 0 {
-		evicted := c.order[0]
-		c.order = c.order[1:]
+	if c.count < c.maxEntries {
+		c.order[(c.head+c.count)%c.maxEntries] = key
+		c.count++
+	} else {
+		evicted := c.order[c.head]
 		delete(c.entries, evicted)
+		c.order[c.head] = key
+		c.head = (c.head + 1) % c.maxEntries
 	}
 
 	c.entries[key] = value
-	c.order = append(c.order, key)
 	return value, false
 }
 
@@ -249,9 +254,10 @@ outer:
 			d.next()
 			fields, _, err := d.parseFieldSpecs()
 			if err != nil {
+				expression := d.expression
 				ops = append(ops, compiledFieldsOp{
 					offset:   start,
-					parseErr: err,
+					parseErr: NewError(&expression, err.Offset(), err.Length(), "%s", err.Error()),
 				})
 				break outer
 			}

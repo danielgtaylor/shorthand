@@ -264,13 +264,24 @@ func TestParserAdditionalErrors(t *testing.T) {
 	}
 }
 
+func TestParserTrimsUnicodeWhitespaceAfterPropertyName(t *testing.T) {
+	d := NewDocument(ParseOptions{
+		EnableObjectDetection: true,
+	})
+
+	err := d.Parse("{name\u00a0: 1}")
+	require.NoError(t, err)
+	require.Len(t, d.Operations, 1)
+	assert.Equal(t, "name", d.Operations[0].Path)
+}
+
 func TestParserInvalidJSONFileInclude(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
 	require.NoError(t, os.WriteFile(path, []byte("{nope"), 0o644))
 
 	d := NewDocument(ParseOptions{
-		EnableFileInput: true,
+		EnableFileInput:       true,
 		EnableObjectDetection: true,
 	})
 	err := d.Parse("a: @" + path)
@@ -284,7 +295,7 @@ func TestParserInvalidCBORFileInclude(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("not-cbor"), 0o644))
 
 	d := NewDocument(ParseOptions{
-		EnableFileInput: true,
+		EnableFileInput:       true,
 		EnableObjectDetection: true,
 	})
 	err := d.Parse("a: @" + path)
