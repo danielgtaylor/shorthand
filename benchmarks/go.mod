@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/danielgtaylor/mexpr v1.10.0 // indirect
+	github.com/danielgtaylor/mexpr v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.5.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
 	github.com/x448/float16 v0.8.4 // indirect

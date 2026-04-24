@@ -3,7 +3,7 @@ module github.com/danielgtaylor/shorthand/cmd/j
 go 1.18
 
 require (
-	github.com/danielgtaylor/shorthand/v2 v2.1.1
+	github.com/danielgtaylor/shorthand/v2 v2.3.0
 	github.com/fxamacker/cbor/v2 v2.5.0
 	github.com/pelletier/go-toml v1.9.5
 	github.com/spf13/cobra v1.8.0

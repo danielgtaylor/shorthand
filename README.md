@@ -540,34 +540,24 @@ fmt.Println(shorthand.MarshalCLI(example))
 
 ## Benchmarks
 
-Shorthand v2 has been completely rewritten from the ground up and is over 20 times faster than v1, putting it at a similar speed/efficiency as the standard library's `encoding/json` package and faster than the popular YAML package while supporting some compelling additional features:
+Shorthand v2 has been completely rewritten from the ground up, putting it at a similar speed/efficiency as the standard library's `encoding/json` package while supporting some compelling additional features:
 
 ```sh
-# Comparing new (V2) vs. old (V1)
-BenchmarkShorthandV2-12     309817    2482 ns/op    1888 B/op    54 allocs/op
-BenchmarkShorthandV1-12      14670   83901 ns/op   36436 B/op   745 allocs/op
+# Core parsing and formatting benchmarks
+BenchmarkMinJSON-12            740353    1438 ns/op    1808 B/op    31 allocs/op
+BenchmarkFormattedJSON-12      760250    1615 ns/op    1712 B/op    30 allocs/op
+BenchmarkShorthand-12          572709    2060 ns/op    1648 B/op    38 allocs/op
+BenchmarkPretty-12             536776    2248 ns/op    1648 B/op    38 allocs/op
+BenchmarkParse-12             1336264     883.2 ns/op   152 B/op    11 allocs/op
+BenchmarkApply-12             1000000    1201 ns/op    1493 B/op    27 allocs/op
 
-# Comparing JSON & YAML to Shorthand
-BenchmarkMinJSON-10         825459    1446 ns/op    1808 B/op    31 allocs/op
-BenchmarkFormattedJSON-10   707174    1658 ns/op    1712 B/op    30 allocs/op
-
-BenchmarkYAML-10            107493   11053 ns/op   12100 B/op   140 allocs/op
-
-BenchmarkShorthand-10       477285    2389 ns/op    1888 B/op    54 allocs/op
-BenchmarkPretty-10          403887    2848 ns/op    1888 B/op    54 allocs/op
-BenchmarkParse-10          1277103     938 ns/op     160 B/op    12 allocs/op
-BenchmarkApply-10           811148    1421 ns/op    1733 B/op    42 allocs/op
-
-# Comparing Shorthand get path to JMESPath
-BenchmarkGetJMESPathSimple-10  414164   2790 ns/op   5799 B/op   74 allocs/op
-BenchmarkGetPathSimple-10     4332314    276 ns/op    224 B/op    5 allocs/op
-
-BenchmarkGetJMESPath-10        224778   5289 ns/op   9374 B/op   119 allocs/op
-BenchmarkGetPath-10            793628   1437 ns/op   1192 B/op    27 allocs/op
-
-BenchmarkGetJMESPathFlat-10   1743403  688.6 ns/op    632 B/op    14 allocs/op
-BenchmarkGetPathFlat-10       1964098  610.3 ns/op    560 B/op    12 allocs/op
+# Query benchmarks
+BenchmarkGetPathSimple-12     26290180      45.42 ns/op    0 B/op     0 allocs/op
+BenchmarkGetPath-12            3474639     339.4 ns/op   456 B/op     7 allocs/op
+BenchmarkGetPathFlatten-12     5275897     247.3 ns/op   320 B/op     6 allocs/op
 ```
+
+There is also a separate comparison benchmark module under `benchmarks/` that compares Shorthand query evaluation against Go implementations of JMESPath and jq.
 
 ## Design & Implementation
 
