@@ -5,10 +5,132 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/mexpr"
 )
+
+type fieldSpec struct {
+	key  string
+	path string
+}
+
+const defaultCompiledCacheMaxEntries = 1024
+
+type boundedConcurrentCache struct {
+	mu         sync.Mutex
+	maxEntries int
+	entries    map[string]any
+	order      []string
+	head       int
+	count      int
+}
+
+func newBoundedConcurrentCache(maxEntries int) *boundedConcurrentCache {
+	if maxEntries < 1 {
+		maxEntries = 1
+	}
+
+	return &boundedConcurrentCache{
+		maxEntries: maxEntries,
+		entries:    make(map[string]any, maxEntries),
+		order:      make([]string, maxEntries),
+	}
+}
+
+func (c *boundedConcurrentCache) Load(key string) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	value, ok := c.entries[key]
+	return value, ok
+}
+
+func (c *boundedConcurrentCache) LoadOrStore(key string, value any) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if cached, ok := c.entries[key]; ok {
+		return cached, true
+	}
+
+	if c.count < c.maxEntries {
+		c.order[(c.head+c.count)%c.maxEntries] = key
+		c.count++
+	} else {
+		evicted := c.order[c.head]
+		delete(c.entries, evicted)
+		c.order[c.head] = key
+		c.head = (c.head + 1) % c.maxEntries
+	}
+
+	c.entries[key] = value
+	return value, false
+}
+
+// compiledPathCache memoizes parsed query plans keyed by the original query
+// string. Compiled queries are immutable after creation and safe to share
+// across goroutines. The cache is bounded to avoid unbounded memory growth in
+// long-lived processes that evaluate many distinct user-provided queries.
+var compiledPathCache = newBoundedConcurrentCache(defaultCompiledCacheMaxEntries)
+
+// mexprCache stores parsed filter ASTs keyed by expression string. The
+// resulting tree is read-only during execution so it is safe to share. The
+// cache is bounded for the same reason as compiledPathCache.
+var mexprCache = newBoundedConcurrentCache(defaultCompiledCacheMaxEntries)
+
+// compiledQuery is the internal prepared-query representation used by GetPath.
+// A query may contain multiple pipe-separated segments, each executed in order.
+type compiledQuery struct {
+	expression string
+	segments   []compiledSegment
+}
+
+type compiledSegment struct {
+	ops []compiledOp
+}
+
+type compiledOp interface{}
+
+type compiledDotOp struct{}
+
+type compiledFlattenOp struct{}
+
+type compiledPropOp struct {
+	key any
+}
+
+type compiledRecursivePropOp struct {
+	key any
+}
+
+type compiledIndexOp struct {
+	isSlice    bool
+	startIndex int
+	stopIndex  int
+}
+
+type compiledFilterOp struct {
+	ast *mexpr.Node
+}
+
+type compiledField struct {
+	key   string
+	query *compiledQuery
+}
+
+type compiledFieldsOp struct {
+	offset   uint
+	fields   []compiledField
+	parseErr Error
+}
+
+type compiledExecResult struct {
+	value    any
+	found    bool
+	consumed bool
+}
 
 type GetOptions struct {
 	// DebugLogger sets a function to be used for printing out debug information.
@@ -33,25 +155,444 @@ func mapKeys[M ~map[K]V, K comparable, V any](m M) []K {
 }
 
 func GetPath(path string, input any, options GetOptions) (any, bool, Error) {
-	d := Document{
-		expression: path,
-		options: ParseOptions{
-			DebugLogger: options.DebugLogger,
-		},
+	query, err := getCompiledPath(path)
+	if err != nil {
+		return nil, false, err
 	}
-	result := input
-	var ok bool
-	var err Error
+	return query.Exec(input, options)
+}
+
+// getCompiledPath returns a cached compiled query plan or builds one on first
+// use. Callers should treat the returned plan as read-only.
+func getCompiledPath(path string) (*compiledQuery, Error) {
+	if cached, ok := compiledPathCache.Load(path); ok {
+		return cached.(*compiledQuery), nil
+	}
+
+	query, err := compilePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	actual, _ := compiledPathCache.LoadOrStore(path, query)
+	return actual.(*compiledQuery), nil
+}
+
+// compilePath parses a query string into executable segments. Parsing reuses
+// the Document helpers below so the compiled path stays aligned with the query
+// grammar and existing error reporting.
+func compilePath(path string) (*compiledQuery, Error) {
+	d := Document{expression: path}
+	query := &compiledQuery{expression: path}
+
 	for d.pos < uint(len(d.expression)) {
-		result, ok, err = d.getPath(result)
+		segment, err := d.compileSegment()
 		if err != nil {
-			return result, ok, err
+			return nil, err
 		}
+		query.segments = append(query.segments, segment)
 		if d.peek() == '|' {
 			d.next()
 		}
 	}
-	return result, ok, nil
+
+	return query, nil
+}
+
+// compileSegment compiles one pipe-delimited segment of a query into a flat
+// sequence of executable ops. Filters and field selections recursively compile
+// nested query fragments.
+func (d *Document) compileSegment() (compiledSegment, Error) {
+	ops := make([]compiledOp, 0, 8)
+
+outer:
+	for {
+		switch d.peek() {
+		case -1, '|':
+			break outer
+		case '[':
+			d.next()
+			if d.peek() == ']' {
+				d.next()
+				ops = append(ops, compiledFlattenOp{})
+				continue
+			}
+
+			isSlice, startIndex, stopIndex, expr, err := d.parsePathIndex()
+			if err != nil {
+				return compiledSegment{}, err
+			}
+
+			if expr != "" {
+				ast, err := compileMexpr(d, expr)
+				if err != nil {
+					return compiledSegment{}, err
+				}
+				ops = append(ops, compiledFilterOp{ast: ast})
+				continue
+			}
+
+			ops = append(ops, compiledIndexOp{
+				isSlice:    isSlice,
+				startIndex: startIndex,
+				stopIndex:  stopIndex,
+			})
+		case '.':
+			d.next()
+			if d.peek() == '.' {
+				d.next()
+				key, err := d.parseGetProp()
+				if err != nil {
+					return compiledSegment{}, err
+				}
+				ops = append(ops, compiledRecursivePropOp{key: key})
+				continue
+			}
+			ops = append(ops, compiledDotOp{})
+		case '{':
+			start := d.pos
+			d.next()
+			fields, _, err := d.parseFieldSpecs()
+			if err != nil {
+				expression := d.expression
+				ops = append(ops, compiledFieldsOp{
+					offset:   start,
+					parseErr: NewError(&expression, err.Offset(), err.Length(), "%s", err.Error()),
+				})
+				break outer
+			}
+
+			compiledFields := make([]compiledField, len(fields))
+			for i, field := range fields {
+				query, err := getCompiledPath(field.path)
+				if err != nil {
+					return compiledSegment{}, err
+				}
+				compiledFields[i] = compiledField{
+					key:   field.key,
+					query: query,
+				}
+			}
+
+			ops = append(ops, compiledFieldsOp{
+				offset: start,
+				fields: compiledFields,
+			})
+		case ',', ']', '}':
+			d.next()
+		default:
+			key, err := d.parseGetProp()
+			if err != nil {
+				return compiledSegment{}, err
+			}
+			ops = append(ops, compiledPropOp{key: key})
+		}
+	}
+
+	return compiledSegment{ops: ops}, nil
+}
+
+// compileMexpr compiles and caches filter expressions used inside `[...]`.
+func compileMexpr(d *Document, expr string) (*mexpr.Node, Error) {
+	if cached, ok := mexprCache.Load(expr); ok {
+		return cached.(*mexpr.Node), nil
+	}
+
+	ast, err := mexpr.Parse(expr, nil)
+	if err != nil {
+		return nil, NewError(&d.expression, d.pos-uint(len(expr)+1)+uint(err.Offset()), uint(err.Length()), err.Error())
+	}
+
+	actual, _ := mexprCache.LoadOrStore(expr, ast)
+	return actual.(*mexpr.Node), nil
+}
+
+// Exec evaluates a compiled query against an input value while preserving the
+// same `(value, found, err)` contract as GetPath.
+func (q *compiledQuery) Exec(input any, options GetOptions) (any, bool, Error) {
+	result := input
+	found := false
+
+	for i := range q.segments {
+		execResult, err := q.execSegment(&q.segments[i], result, 0, options)
+		if err != nil {
+			return execResult.value, execResult.found, err
+		}
+		result = execResult.value
+		found = execResult.found
+	}
+
+	return result, found, nil
+}
+
+// execSegment executes a compiled segment, optionally starting in the middle of
+// the op list. That ability lets filter and dot-fanout ops apply the remaining
+// tail of the segment to each matching array item without reparsing the query.
+func (q *compiledQuery) execSegment(segment *compiledSegment, input any, start int, options GetOptions) (compiledExecResult, Error) {
+	result := input
+	found := false
+	consumed := false
+
+	for i := start; i < len(segment.ops); i++ {
+		switch op := segment.ops[i].(type) {
+		case compiledDotOp:
+			consumed = true
+
+			items, ok := result.([]any)
+			if !ok {
+				continue
+			}
+
+			out := make([]any, 0, len(items))
+			for _, item := range items {
+				child, err := q.execSegment(segment, item, i+1, options)
+				if err != nil {
+					return compiledExecResult{}, err
+				}
+				if child.consumed {
+					if child.found {
+						out = append(out, child.value)
+					}
+				} else if child.value != nil {
+					out = append(out, child.value)
+				}
+			}
+
+			return compiledExecResult{value: out, found: true, consumed: true}, nil
+		case compiledFlattenOp:
+			if options.DebugLogger != nil {
+				options.DebugLogger("Flattening %v", result)
+			}
+			if items, ok := result.([]any); ok {
+				out := make([]any, 0, len(items))
+				for _, item := range items {
+					if !isArray(item) {
+						out = append(out, item)
+						continue
+					}
+					out = append(out, item.([]any)...)
+				}
+				result = out
+			} else {
+				result = nil
+			}
+			found = true
+			consumed = true
+		case compiledPropOp:
+			var ok bool
+			result, ok = execCompiledProp(op.key, result, options)
+			found = ok
+			consumed = true
+		case compiledRecursivePropOp:
+			var err Error
+			result, err = execCompiledRecursiveProp(op.key, result, options)
+			if err != nil {
+				return compiledExecResult{}, err
+			}
+			found = true
+			consumed = true
+		case compiledIndexOp:
+			result = execCompiledIndex(op, result, options)
+			found = true
+			consumed = true
+		case compiledFilterOp:
+			consumed = true
+			items, ok := result.([]any)
+			if !ok {
+				result = nil
+				found = true
+				continue
+			}
+
+			interpreter := mexpr.NewInterpreter(op.ast, mexpr.UnquotedStrings)
+			out := make([]any, 0, len(items))
+			for _, item := range items {
+				filterResult, err := interpreter.Run(item)
+				if err != nil {
+					continue
+				}
+				if matched, ok := filterResult.(bool); ok && matched {
+					child, err := q.execSegment(segment, item, i+1, options)
+					if err != nil {
+						return compiledExecResult{}, err
+					}
+					out = append(out, child.value)
+				}
+			}
+
+			return compiledExecResult{value: out, found: true, consumed: true}, nil
+		case compiledFieldsOp:
+			if !isMap(result) {
+				return compiledExecResult{}, NewError(&q.expression, op.offset, 1, "field selection requires a map, but found %v", result)
+			}
+			if op.parseErr != nil {
+				return compiledExecResult{}, op.parseErr
+			}
+
+			out := make(map[string]any, len(op.fields))
+			for _, field := range op.fields {
+				value, _, err := field.query.Exec(result, options)
+				if err != nil {
+					return compiledExecResult{}, err
+				}
+				out[field.key] = value
+			}
+			result = out
+			found = true
+			consumed = true
+		}
+	}
+
+	return compiledExecResult{value: result, found: found, consumed: consumed}, nil
+}
+
+// execCompiledProp resolves a single property access or wildcard against a map.
+func execCompiledProp(key any, input any, options GetOptions) (any, bool) {
+	if options.DebugLogger != nil {
+		options.DebugLogger("Getting key '%v'", key)
+	}
+
+	if m, ok := input.(map[string]any); ok {
+		if s, ok := key.(string); ok {
+			if s == "*" {
+				keys := mapKeys(m)
+				sort.Strings(keys)
+				values := make([]any, len(m))
+				for i, k := range keys {
+					values[i] = m[k]
+				}
+				return values, true
+			}
+
+			v, ok := m[s]
+			return v, ok
+		}
+	} else if m, ok := input.(map[any]any); ok {
+		if s, ok := key.(string); ok && s == "*" {
+			keys := make([]any, 0, len(m))
+			for k := range m {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool {
+				return fmt.Sprintf("%v", keys[i]) < fmt.Sprintf("%v", keys[j])
+			})
+			values := make([]any, len(m))
+			for i, k := range keys {
+				values[i] = m[k]
+			}
+			return values, true
+		}
+
+		v, ok := m[key]
+		return v, ok
+	}
+
+	if options.DebugLogger != nil {
+		options.DebugLogger("Cannot get key %v from input %v", key, input)
+	}
+
+	return nil, false
+}
+
+// execCompiledRecursiveProp performs recursive descent (`..field`) against the
+// input tree while preserving the stable ordering expected by existing tests.
+func execCompiledRecursiveProp(key, input any, options GetOptions) ([]any, Error) {
+	if options.DebugLogger != nil {
+		options.DebugLogger("Recursive getting key '%v'", key)
+	}
+	return execCompiledFindPropRecursive(key, input)
+}
+
+func execCompiledFindPropRecursive(key, input any) ([]any, Error) {
+	var results []any
+
+	if m, ok := input.(map[string]any); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := m[k]
+			if s, ok := key.(string); ok && k == s {
+				results = append(results, v)
+			}
+			if nested, err := execCompiledFindPropRecursive(key, v); err == nil {
+				results = append(results, nested...)
+			}
+		}
+	}
+
+	if m, ok := input.(map[any]any); ok {
+		for k, v := range m {
+			if k == key {
+				results = append(results, v)
+			}
+			if nested, err := execCompiledFindPropRecursive(key, v); err == nil {
+				results = append(results, nested...)
+			}
+		}
+	}
+
+	if items, ok := input.([]any); ok {
+		for _, item := range items {
+			if nested, err := execCompiledFindPropRecursive(key, item); err == nil {
+				results = append(results, nested...)
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// execCompiledIndex applies array/string/byte indexing and slicing semantics
+// for a pre-parsed index operation.
+func execCompiledIndex(op compiledIndexOp, input any, options GetOptions) any {
+	if options.DebugLogger != nil {
+		options.DebugLogger("Getting index %v:%v ", op.startIndex, op.stopIndex)
+	}
+
+	length := 0
+	switch value := input.(type) {
+	case string:
+		length = utf8.RuneCountInString(value)
+	case []byte:
+		length = len(value)
+	case []any:
+		length = len(value)
+	}
+
+	startIndex := op.startIndex
+	stopIndex := op.stopIndex
+	if startIndex < 0 {
+		startIndex += length
+	}
+	if stopIndex < 0 {
+		stopIndex += length
+	}
+	if stopIndex > length-1 {
+		stopIndex = length - 1
+	}
+	if startIndex < 0 || startIndex > length-1 || stopIndex < 0 || startIndex > stopIndex {
+		return nil
+	}
+
+	switch value := input.(type) {
+	case string:
+		return stringRuneSlice(value, startIndex, stopIndex)
+	case []byte:
+		if !op.isSlice {
+			return value[startIndex]
+		}
+		return value[startIndex : stopIndex+1]
+	case []any:
+		if !op.isSlice {
+			return value[startIndex]
+		}
+		return value[startIndex : stopIndex+1]
+	default:
+		return nil
+	}
 }
 
 func (d *Document) parseUntil(open int, terminators ...rune) (quoted bool, canSlice bool, err Error) {
@@ -106,6 +647,9 @@ outer:
 	return
 }
 
+// parsePathIndex parses the contents of `[...]` after the opening `[` has
+// already been consumed. It returns either an index/slice description or a
+// filter expression string for the compiled query engine to handle.
 func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 	d.skipWhitespace()
 	start := d.pos
@@ -153,41 +697,6 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 	return false, 0, 0, value, nil
 }
 
-func (d *Document) getFiltered(expr string, input any) (any, Error) {
-	ast, err := mexpr.Parse(expr, nil)
-	if err != nil {
-		// Pos = current - expression - 1 for bracket + error offset.
-		// a.b.c[filter is here]
-		// current position....^
-		return nil, NewError(&d.expression, d.pos-uint(len(expr)+1)+uint(err.Offset()), uint(err.Length()), err.Error())
-	}
-	interpreter := mexpr.NewInterpreter(ast, mexpr.UnquotedStrings)
-	savedPos := d.pos
-
-	if s, ok := input.([]any); ok {
-		results := []any{}
-		for _, item := range s {
-			result, err := interpreter.Run(item)
-			if err != nil {
-				continue
-			}
-			if b, ok := result.(bool); ok && b {
-				out := item
-
-				var err Error
-				d.pos = savedPos
-				out, _, err = d.getPath(item)
-				if err != nil {
-					return nil, err
-				}
-				results = append(results, out)
-			}
-		}
-		return results, nil
-	}
-	return nil, nil
-}
-
 func stringRuneSlice(s string, startIndex int, stopIndex int) string {
 	byteStart := 0
 	byteEnd := len(s)
@@ -205,61 +714,6 @@ func stringRuneSlice(s string, startIndex int, stopIndex int) string {
 	}
 
 	return s[byteStart:byteEnd]
-}
-
-func (d *Document) getPathIndex(input any) (any, Error) {
-	isSlice, startIndex, stopIndex, expr, err := d.parsePathIndex()
-	if err != nil {
-		return nil, err
-	}
-
-	if d.options.DebugLogger != nil {
-		d.options.DebugLogger("Getting index %v:%v %v", startIndex, stopIndex, expr)
-	}
-
-	if expr != "" {
-		return d.getFiltered(expr, input)
-	}
-
-	l := 0
-	switch t := input.(type) {
-	case string:
-		l = utf8.RuneCountInString(t)
-	case []byte:
-		l = len(t)
-	case []any:
-		l = len(t)
-	}
-
-	if startIndex < 0 {
-		startIndex += l
-	}
-	if stopIndex < 0 {
-		stopIndex += l
-	}
-	if stopIndex > l-1 {
-		stopIndex = l - 1
-	}
-	if startIndex < 0 || startIndex > l-1 || stopIndex < 0 || startIndex > stopIndex {
-		return nil, nil
-	}
-
-	switch t := input.(type) {
-	case string:
-		return stringRuneSlice(t, startIndex, stopIndex), nil
-	case []byte:
-		if !isSlice {
-			return t[startIndex], nil
-		}
-		return t[startIndex : stopIndex+1], nil
-	case []any:
-		if !isSlice {
-			return t[startIndex], nil
-		}
-		return t[startIndex : stopIndex+1], nil
-	}
-
-	return nil, nil
 }
 
 func (d *Document) parseGetProp() (any, Error) {
@@ -286,249 +740,22 @@ func (d *Document) parseGetProp() (any, Error) {
 	return key, nil
 }
 
-func (d *Document) getProp(input any) (any, bool, Error) {
-	key, err := d.parseGetProp()
-	if err != nil {
-		return nil, false, err
-	}
-
-	if d.options.DebugLogger != nil {
-		d.options.DebugLogger("Getting key '%v'", key)
-	}
-
-	if m, ok := input.(map[string]any); ok {
-		if s, ok := key.(string); ok {
-			if key == "*" {
-				// Special case: wildcard property
-				keys := mapKeys(m)
-				sort.Strings(keys)
-				values := make([]any, len(m))
-				for i, k := range keys {
-					values[i] = m[k]
-				}
-				return values, true, nil
-			}
-
-			v, ok := m[s]
-			return v, ok, nil
-		}
-	} else if m, ok := input.(map[any]any); ok {
-		if s, ok := key.(string); ok && s == "*" {
-			// Special case: wildcard property
-			keys := make([]any, 0, len(m))
-			for k := range m {
-				keys = append(keys, k)
-			}
-			sort.Slice(keys, func(i, j int) bool {
-				// This order is not perfect, but crucially it *is* stable.
-				return fmt.Sprintf("%v", keys[i]) < fmt.Sprintf("%v", keys[j])
-			})
-			values := make([]any, len(m))
-			for i, k := range keys {
-				values[i] = m[k]
-			}
-			return values, true, nil
-		}
-
-		v, ok := m[key]
-		return v, ok, nil
-	} else {
-		if d.options.DebugLogger != nil {
-			d.options.DebugLogger("Cannot get key %v from input %v", key, input)
-		}
-	}
-
-	return nil, false, nil
-}
-
-func (d *Document) getPropRecursive(input any) ([]any, Error) {
-	key, err := d.parseGetProp()
-	if err != nil {
-		return nil, err
-	}
-
-	if d.options.DebugLogger != nil {
-		d.options.DebugLogger("Recursive getting key '%v'", key)
-	}
-
-	return d.findPropRecursive(key, input)
-}
-
-func (d *Document) findPropRecursive(key, input any) ([]any, Error) {
-	results := []any{}
-
-	savedPos := d.pos
-	if m, ok := input.(map[string]any); ok {
-		keys := make([]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			v := m[k]
-			if s, ok := key.(string); ok {
-				if k == s {
-					results = append(results, v)
-				}
-			}
-			d.pos = savedPos
-			if tmp, err := d.findPropRecursive(key, v); err == nil {
-				results = append(results, tmp...)
-			}
-		}
-	}
-	if m, ok := input.(map[any]any); ok {
-		for k, v := range m {
-			if k == key {
-				results = append(results, v)
-			}
-			d.pos = savedPos
-			if tmp, err := d.findPropRecursive(key, v); err == nil {
-				results = append(results, tmp...)
-			}
-		}
-	}
-	if s, ok := input.([]any); ok {
-		for _, v := range s {
-			d.pos = savedPos
-			if tmp, err := d.findPropRecursive(key, v); err == nil {
-				results = append(results, tmp...)
-			}
-		}
-	}
-
-	return results, nil
-}
-
-// flatten nested arrays one level. Returns `nil` if the input is not an array.
-func (d *Document) flatten(input any) any {
-	if d.options.DebugLogger != nil {
-		d.options.DebugLogger("Flattening %v", input)
-	}
-	if s, ok := input.([]any); ok {
-		out := make([]any, 0, len(s))
-
-		for _, item := range s {
-			if !isArray(item) {
-				out = append(out, item)
-				continue
-			}
-
-			out = append(out, item.([]any)...)
-		}
-		return out
-	}
-	return nil
-}
-
-func (d *Document) getPath(input any) (any, bool, Error) {
-	var err Error
-	found := false
-
-outer:
-	for {
-		switch d.peek() {
-		case -1, '|':
-			break outer
-		case '[':
-			d.next()
-			if d.peek() == ']' {
-				// Special case: flatten one level
-				// [[1, 2], 3, [[4]]] => [1, 2, 3, [4]]
-				d.next()
-				input = d.flatten(input)
-				found = true
-				continue
-			}
-			input, err = d.getPathIndex(input)
-			if err != nil {
-				return nil, false, err
-			}
-			found = true
-		case '.':
-			d.next()
-			if d.peek() == '.' {
-				// Special case: recursive descent property query
-				// i.e. find this key recursively through everything
-				d.next()
-				input, err = d.getPropRecursive(input)
-				if err != nil {
-					return nil, false, err
-				}
-			}
-			if s, ok := input.([]any); ok {
-				// Special case: input is an slice of items, so run the right hand
-				// side on every item in the slice.
-				var err Error
-				var result any
-				var resultFound bool
-				savedPos := d.pos
-				out := make([]any, 0, len(s))
-
-				if len(s) == 0 {
-					// We will get `nil`, but still need to move the read head forwards to
-					// prevent an infinite loop here.
-					d.getPath(nil)
-				}
-
-				for i := range s {
-					d.pos = savedPos
-					result, resultFound, err = d.getPath(s[i])
-					if err != nil {
-						return nil, false, err
-					}
-					// When path was consumed, use resultFound to correctly distinguish
-					// "field absent" (skip) from "field is null" (keep). When no path
-					// was consumed (e.g. after recursive descent passes results through),
-					// fall back to a non-nil check.
-					if d.pos > savedPos {
-						if resultFound {
-							out = append(out, result)
-						}
-					} else if result != nil {
-						out = append(out, result)
-					}
-				}
-
-				return out, true, nil
-			}
-			continue
-		case '{':
-			d.next()
-			input, err = d.getFields(input)
-			if err != nil {
-				return nil, false, err
-			}
-			found = true
-			continue
-		case ',', ']', '}':
-			d.next()
-		default:
-			input, found, err = d.getProp(input)
-			if err != nil {
-				return nil, false, err
-			}
-		}
-	}
-
-	return input, found, nil
-}
-
-func (d *Document) getFields(input any) (any, Error) {
+// parseFieldSpecs parses the contents of `{...}` after the opening `{` has
+// already been consumed. It returns field aliases and their child path strings
+// so the compiled query engine can recursively compile them.
+func (d *Document) parseFieldSpecs() ([]fieldSpec, uint, Error) {
 	d.buf.Reset()
-	if !isMap(input) {
-		return nil, d.error(1, "field selection requires a map, but found %v", input)
-	}
-	result := map[string]any{}
+	start := d.pos - 1
 	key := ""
 	open := 1
 	var r rune
 	d.skipWhitespace()
+	fields := make([]fieldSpec, 0, 4)
 	for {
 		r = d.next()
 		if r == '"' {
 			if err := d.parseQuoted(true); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			continue
 		}
@@ -538,11 +765,13 @@ func (d *Document) getFields(input any) (any, Error) {
 			}
 		}
 		if r == -1 {
-			break
+			return nil, 0, d.error(1, "expected '}' to close field selection")
 		}
 		if r == '[' {
 			d.buf.WriteRune(r)
-			d.parseUntilNoReset(1, '|')
+			if _, _, err := d.parseUntilNoReset(1, '|'); err != nil {
+				return nil, 0, err
+			}
 			continue
 		}
 		if r == ':' && open <= 1 {
@@ -564,13 +793,7 @@ func (d *Document) getFields(input any) (any, Error) {
 				// like `{"foo.bar"}` produce key "foo.bar", not "foo\.bar".
 				key = unescapePropPath(path)
 			}
-			value, _, err := GetPath(path, input, GetOptions{
-				DebugLogger: d.options.DebugLogger,
-			})
-			if err != nil {
-				return nil, err
-			}
-			result[key] = value
+			fields = append(fields, fieldSpec{key: key, path: path})
 			if r == '}' {
 				break
 			}
@@ -581,5 +804,5 @@ func (d *Document) getFields(input any) (any, Error) {
 		}
 		d.buf.WriteRune(r)
 	}
-	return result, nil
+	return fields, d.pos - start, nil
 }

@@ -104,7 +104,7 @@ func TestGetInputInvalidUTF8StructuredEdit(t *testing.T) {
 
 func TestGetInputForceFloat64Numbers(t *testing.T) {
 	result, isStruct, err := getInput(0, strings.NewReader(`{"count": 1}`), []string{"value: 2"}, ParseOptions{
-		ForceFloat64Numbers: true,
+		ForceFloat64Numbers:   true,
 		EnableObjectDetection: true,
 	})
 	require.NoError(t, err)
@@ -342,6 +342,13 @@ func TestConvertMapStringRecursivelyConvertsNestedKeys(t *testing.T) {
 			},
 		},
 	}, ConvertMapString(input))
+}
+
+func TestErrorPrettyUsesErrorLength(t *testing.T) {
+	source := "alpha beta gamma"
+	err := NewError(&source, 6, 4, "bad token")
+
+	assert.Equal(t, "bad token at line 1 col 7\nalpha beta gamma\n......^^^^", err.Pretty())
 }
 
 func TestUnmarshalCommentDisambiguation(t *testing.T) {

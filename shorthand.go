@@ -62,13 +62,7 @@ func getInput(mode fs.FileMode, stdinFile io.Reader, args []string, options Pars
 			return nil, false, ErrInvalidFile
 		}
 
-		result, err := Unmarshal(string(d), ParseOptions{
-			EnableFileInput:       options.EnableFileInput,
-			EnableObjectDetection: options.EnableObjectDetection,
-			ForceStringKeys:       options.ForceStringKeys,
-			ForceFloat64Numbers:   options.ForceFloat64Numbers,
-			DebugLogger:           options.DebugLogger,
-		}, nil)
+		result, err := Unmarshal(string(d), options, nil)
 		if err != nil {
 			return nil, false, err
 		}
@@ -98,11 +92,7 @@ func (o MarshalOptions) GetIndent(level int) string {
 	if o.Indent == "" {
 		return ""
 	}
-	result := "\n"
-	for i := 0; i < level; i++ {
-		result += o.Indent
-	}
-	return result
+	return "\n" + strings.Repeat(o.Indent, level)
 }
 
 func (o MarshalOptions) GetSeparator(level int) string {
@@ -124,12 +114,7 @@ func quoteString(s string) string {
 }
 
 func containsAnyRune(s string, chars string) bool {
-	for _, r := range s {
-		if strings.ContainsRune(chars, r) {
-			return true
-		}
-	}
-	return false
+	return strings.IndexAny(s, chars) >= 0
 }
 
 func shouldQuoteKey(s string) bool {
@@ -209,7 +194,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 		}
 
 		// Normal case: foo{a: 1, b: 2}
-		var keys []any
+		keys := make([]any, 0, len(v))
 
 		for k := range v {
 			keys = append(keys, k)
@@ -219,7 +204,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 			return fmt.Sprintf("%v", keys[i]) < fmt.Sprintf("%v", keys[j])
 		})
 
-		var fields []string
+		fields := make([]string, 0, len(v))
 		for _, k := range keys {
 			fields = append(fields, renderMapKey(k)+renderValue(options, level+1, true, v[k]))
 		}
@@ -238,7 +223,7 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 		}
 
 		// Normal case: foo{a: 1, b: 2}
-		var keys []string
+		keys := make([]string, 0, len(v))
 
 		for k := range v {
 			keys = append(keys, k)
@@ -246,14 +231,14 @@ func renderValue(options MarshalOptions, level int, fromKey bool, value any) str
 
 		sort.Strings(keys)
 
-		var fields []string
+		fields := make([]string, 0, len(v))
 		for _, k := range keys {
 			fields = append(fields, renderStringKey(k)+renderValue(options, level+1, true, v[k]))
 		}
 
 		return "{" + options.GetIndent(level+1) + strings.Join(fields, options.GetSeparator(level+1)) + options.GetIndent(level) + "}"
 	case []any:
-		var items []string
+		items := make([]string, 0, len(v))
 
 		// Normal case: foo: [1, true, {id: 1, count: 2}]
 		for _, item := range v {
