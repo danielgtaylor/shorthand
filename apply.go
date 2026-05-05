@@ -182,10 +182,9 @@ func (d *Document) applyPathPart(input any, op Operation) (any, Error) {
 
 		if r == '.' || r == '[' || r == -1 {
 			keystr := d.buf.String()
-			var key any = keystr
 			d.buf.Reset()
 
-			if key == "" && !quoted {
+			if keystr == "" && !quoted {
 				// Special case: raw value
 				if r == '[' {
 					// This raw value is an array.
@@ -194,48 +193,76 @@ func (d *Document) applyPathPart(input any, op Operation) (any, Error) {
 				return op.Value, nil
 			}
 
+			// Determine if this key coerces to a non-string type.
+			// Avoid boxing keystr into any until we actually need map[any]any.
+			var coercedKey any
+			hasCoercedKey := false
 			if !d.options.ForceStringKeys && !quoted {
 				if tmp, ok := coerceValue(keystr, d.options.ForceFloat64Numbers); ok {
-					key = tmp
+					coercedKey = tmp
+					hasCoercedKey = true
 				}
 			}
 
 			if d.options.DebugLogger != nil {
-				d.options.DebugLogger("Setting key %v", key)
+				if hasCoercedKey {
+					d.options.DebugLogger("Setting key %v", coercedKey)
+				} else {
+					d.options.DebugLogger("Setting key %v", keystr)
+				}
 			}
 
-			wantMap := true
-			applyFunc := d.applyPathPart
-			if r == '[' {
-				wantMap = false
-				applyFunc = d.applyIndex
-			} else if r == -1 {
-				applyFunc = applyValue
-			}
+			useIndex := r == '['
+			atLeaf := r == -1
+			wantMap := !useIndex
 
 			if !isMap(input) {
-				if def, ok := withDefault(true, key, nil); ok {
+				// withDefault needs a key to decide map[string]any vs map[any]any.
+				var defaultKey any
+				if hasCoercedKey {
+					defaultKey = coercedKey
+				} else {
+					defaultKey = keystr
+				}
+				if def, ok := withDefault(true, defaultKey, nil); ok {
 					input = def
 				}
 			}
 
 			if m, ok := input.(map[string]any); ok {
-				if s, ok := key.(string); ok {
+				if !hasCoercedKey {
+					// Fast path: string key on a string map. Use keystr directly
+					// to avoid boxing it into interface{}.
 					if wantMap && op.Kind == OpDelete {
-						delete(m, s)
+						delete(m, keystr)
 					} else {
-						result, err := applyFunc(m[s], op)
+						var result any
+						var err Error
+						if atLeaf {
+							result = op.Value
+						} else if useIndex {
+							result, err = d.applyIndex(m[keystr], op)
+						} else {
+							result, err = d.applyPathPart(m[keystr], op)
+						}
 						if err != nil {
 							return nil, err
 						}
-						m[s] = result
+						m[keystr] = result
 					}
 					break
-				} else {
-					// Key is not a string, so convert input into a generic
-					// map[any]any and process it further below.
-					input = makeGenericMap(m)
 				}
+				// Key is not a string, so convert input into a generic
+				// map[any]any and process it further below.
+				input = makeGenericMap(m)
+			}
+
+			// Box the key for map[any]any only when we actually reach this path.
+			var key any
+			if hasCoercedKey {
+				key = coercedKey
+			} else {
+				key = keystr
 			}
 
 			if m, ok := input.(map[any]any); ok {
@@ -246,7 +273,15 @@ func (d *Document) applyPathPart(input any, op Operation) (any, Error) {
 					if def, ok := withDefault(wantMap, key, v); ok {
 						v = def
 					}
-					result, err := applyFunc(v, op)
+					var result any
+					var err Error
+					if atLeaf {
+						result = op.Value
+					} else if useIndex {
+						result, err = d.applyIndex(v, op)
+					} else {
+						result, err = d.applyPathPart(v, op)
+					}
 					if err != nil {
 						return nil, err
 					}

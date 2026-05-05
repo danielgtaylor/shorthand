@@ -83,7 +83,14 @@ func (e *exprErr) Pretty() string {
 	for i := uint(lineStart); i < e.offset; i++ {
 		msg += "."
 	}
-	for i := 0; i < end-int(e.offset); i++ {
+	length := int(e.length)
+	if remaining := end - int(e.offset); length > remaining {
+		length = remaining
+	}
+	if length < 1 {
+		length = 1
+	}
+	for i := 0; i < length; i++ {
 		msg += "^"
 	}
 	return msg

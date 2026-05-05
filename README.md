@@ -89,7 +89,7 @@ It seems reasonable to ask, why create a new syntax?
 You can use the included `j` executable to try out the shorthand format examples below. Examples are shown in JSON, but the shorthand parses into structured data that can be marshalled as other formats, like YAML or TOML if you prefer.
 
 ```sh
-go get -u github.com/danielgtaylor/shorthand/cmd/j
+go install github.com/danielgtaylor/shorthand/cmd/j@latest
 ```
 
 Also feel free to use this tool to generate structured data for input to other commands.
@@ -183,7 +183,7 @@ Shorthand supports the standard JSON types, but adds some of its own as well to 
 | `number`  | JSON number, e.g. `1`, `2.5`, or `1.4e5`                         |
 | `string`  | Quoted or unquoted strings, e.g. `hello` or `"hello"`            |
 | `bytes`   | `%`-prefixed, unquoted, base64-encoded binary data, e.g. `%wg==` |
-| `time`    | Date/time in ISO8601, e.g. `2022-01-01T12:00:00Z`                |
+| `time`    | RFC3339 date/time, e.g. `2022-01-01T12:00:00Z`                   |
 | `array`   | JSON array, e.g. `[1, 2, 3]`                                     |
 | `object`  | JSON object, e.g. `{"hello": "world"}`                           |
 
@@ -398,7 +398,7 @@ The query language supports:
 
 - Paths for objects & arrays `foo.items.name`
 - Wildcards for unknown props `foo.*.name`
-- Array indexing & slicing `foo.items[1:2].name`
+- Array indexing & slicing `foo.items[1:2].name` (both ends inclusive: `[1:2]` returns items at indexes 1 and 2)
   - Including negative indexes `foo.items[-1].name`
 - Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
 - Array construction `[foo.id, foo.name]`
@@ -490,11 +490,11 @@ $ j <data.json -q 'users[friends contains b].id'
 $ j <data.json -q 'users[friends contains b].{id, age}'
 [
   {
-    "age": null,
+    "age": 5,
     "id": 1
   },
   {
-    "age": null,
+    "age": 6,
     "id": 2
   }
 ]
@@ -516,6 +516,8 @@ $ j <data.json -q '{vars: [users[0].id, users[0].friends[0]]}'
 }
 ```
 
+> **Note on slice ranges:** Shorthand uses inclusive ranges on both ends, so `[1:2]` returns items at indexes 1 **and** 2. This is an intentional design choice: shorthand is meant to be intuitive for query use, where "items 1 to 2" naturally means both endpoints. Dijkstra's classic argument for exclusive end ranges (empty range, length arithmetic, concatenation) applies to programming with ranges, not to querying. Users familiar with jq or JMESPath (which use exclusive end) need only remember this one difference.
+
 ## Library Usage
 
 Aside from `Marshal` and `Unmarshal` functions, the `GetInput` function provides an all-in-one quick and simple way to get input from both stdin and passed arguments for CLI applications:
@@ -525,13 +527,21 @@ package main
 
 import (
   "fmt"
+  "os"
+
   "github.com/danielgtaylor/shorthand/v2"
 )
 
 func main() {
-  result, err := shorthand.GetInput(os.Args[1:])
+  result, isStructured, err := shorthand.GetInput(os.Args[1:], shorthand.ParseOptions{
+    EnableFileInput:       true,
+    EnableObjectDetection: true,
+  })
   if err != nil {
     panic(err)
+  }
+  if !isStructured {
+    panic("input is not structured data")
   }
 
   fmt.Println(result)
@@ -555,34 +565,24 @@ fmt.Println(shorthand.MarshalCLI(example))
 
 ## Benchmarks
 
-Shorthand v2 has been completely rewritten from the ground up and is over 20 times faster than v1, putting it at a similar speed/efficiency as the standard library's `encoding/json` package and faster than the popular YAML package while supporting some compelling additional features:
+Shorthand v2 has been completely rewritten from the ground up, putting it at a similar speed/efficiency as the standard library's `encoding/json` package while supporting some compelling additional features:
 
 ```sh
-# Comparing new (V2) vs. old (V1)
-BenchmarkShorthandV2-12     309817    2482 ns/op    1888 B/op    54 allocs/op
-BenchmarkShorthandV1-12      14670   83901 ns/op   36436 B/op   745 allocs/op
+# Core parsing and formatting benchmarks
+BenchmarkMinJSON-12            723205    1471 ns/op    1808 B/op    31 allocs/op
+BenchmarkFormattedJSON-12      715772    1684 ns/op    1712 B/op    30 allocs/op
+BenchmarkShorthand-12          569120    2160 ns/op    1648 B/op    38 allocs/op
+BenchmarkPretty-12             540336    2274 ns/op    1648 B/op    38 allocs/op
+BenchmarkParse-12             1342033     894.8 ns/op   152 B/op    11 allocs/op
+BenchmarkApply-12              985106    1248 ns/op    1493 B/op    27 allocs/op
 
-# Comparing JSON & YAML to Shorthand
-BenchmarkMinJSON-10         825459    1446 ns/op    1808 B/op    31 allocs/op
-BenchmarkFormattedJSON-10   707174    1658 ns/op    1712 B/op    30 allocs/op
-
-BenchmarkYAML-10            107493   11053 ns/op   12100 B/op   140 allocs/op
-
-BenchmarkShorthand-10       477285    2389 ns/op    1888 B/op    54 allocs/op
-BenchmarkPretty-10          403887    2848 ns/op    1888 B/op    54 allocs/op
-BenchmarkParse-10          1277103     938 ns/op     160 B/op    12 allocs/op
-BenchmarkApply-10           811148    1421 ns/op    1733 B/op    42 allocs/op
-
-# Comparing Shorthand get path to JMESPath
-BenchmarkGetJMESPathSimple-10  414164   2790 ns/op   5799 B/op   74 allocs/op
-BenchmarkGetPathSimple-10     4332314    276 ns/op    224 B/op    5 allocs/op
-
-BenchmarkGetJMESPath-10        224778   5289 ns/op   9374 B/op   119 allocs/op
-BenchmarkGetPath-10            793628   1437 ns/op   1192 B/op    27 allocs/op
-
-BenchmarkGetJMESPathFlat-10   1743403  688.6 ns/op    632 B/op    14 allocs/op
-BenchmarkGetPathFlat-10       1964098  610.3 ns/op    560 B/op    12 allocs/op
+# Query benchmarks
+BenchmarkGetPathSimple-12     26379883      49.28 ns/op    0 B/op     0 allocs/op
+BenchmarkGetPath-12            3301216     345.3 ns/op   456 B/op     7 allocs/op
+BenchmarkGetPathFlatten-12     5693767     209.7 ns/op   320 B/op     6 allocs/op
 ```
+
+There is also a separate comparison benchmark module under `benchmarks/` that compares Shorthand query evaluation against Go implementations of JMESPath and jq.
 
 ## Design & Implementation
 
@@ -607,7 +607,7 @@ foo.bar{id: 1, tags: [{value: a}, {value: b}]}
   "foo": {
     "bar": {
       "id": 1,
-      "tags: [
+      "tags": [
         {"value": "a"},
         {"value": "b"}
       ]
@@ -624,5 +624,6 @@ The file `get.go` provides an implementation of query parsing. It also utilizes 
 No special steps are necessary to test local changes to the grammar. You can just run the included `j` utility to test:
 
 ```sh
-$ go run ./cmd/j your: new feature here
+$ cd cmd/j
+$ go run . your: new feature here
 ```

@@ -13,7 +13,7 @@ const (
 )
 
 type ParseOptions struct {
-	// EnableFileInput turns on support for `@filename`` values which load from
+	// EnableFileInput turns on support for `@filename` values which load from
 	// files rather than being treated as string input.
 	EnableFileInput bool
 

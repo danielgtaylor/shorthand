@@ -3,7 +3,7 @@ module github.com/danielgtaylor/shorthand/v2
 go 1.18
 
 require (
-	github.com/danielgtaylor/mexpr v1.10.0
+	github.com/danielgtaylor/mexpr v1.10.1
 	github.com/fxamacker/cbor/v2 v2.5.0
 	github.com/stretchr/testify v1.8.4
 )

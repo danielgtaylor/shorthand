@@ -2,6 +2,7 @@ package shorthand
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -401,6 +402,12 @@ var getExamples = []struct {
 		Error: "field selection requires a map",
 	},
 	{
+		Name:  "Field select unclosed on map",
+		Input: `{"id": 1}`,
+		Query: `{id`,
+		Error: "expected '}' to close field selection",
+	},
+	{
 		Name:  "Array literal unclosed",
 		Input: `{}`,
 		Query: `[`,
@@ -598,6 +605,286 @@ func TestGetFieldSelectionUnescapesOutputKeys(t *testing.T) {
 		"foo.bar": 1,
 		"a[b]":    2,
 	}, result)
+}
+
+func TestGetPathRealWorldStyleQueries(t *testing.T) {
+	t.Run("Restish style collection query", func(t *testing.T) {
+		query := "items[status == ready].{id, title, self: _links.self.href, author: content.author.login, tags: content.tags, latency: content.stats.response_ms}"
+
+		inputA, expectedA := makeRestishQueryFixture(0)
+		got, found, err := GetPath(query, inputA, GetOptions{})
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, expectedA, got)
+
+		// Reuse the same compiled query against a different input to ensure no
+		// execution state leaks through the cache.
+		inputB, expectedB := makeRestishQueryFixture(1)
+		got, found, err = GetPath(query, inputB, GetOptions{})
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, expectedB, got)
+	})
+
+	t.Run("AWS style volume query", func(t *testing.T) {
+		query := "Volumes[VolumeType == gp3].{id: VolumeId, az: AvailabilityZone, attachedInstance: Attachments.InstanceId|[0], name: Tags[Key == Name].Value|[0]}"
+
+		inputA, expectedA := makeAWSVolumeQueryFixture(0)
+		got, found, err := GetPath(query, inputA, GetOptions{})
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, expectedA, got)
+
+		inputB, expectedB := makeAWSVolumeQueryFixture(1)
+		got, found, err = GetPath(query, inputB, GetOptions{})
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, expectedB, got)
+	})
+}
+
+func TestGetPathCachedMalformedQueries(t *testing.T) {
+	t.Run("unclosed field selection keeps input-sensitive error precedence", func(t *testing.T) {
+		query := `{id`
+
+		_, _, err := GetPath(query, []any{1.0, 2.0}, GetOptions{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "field selection requires a map")
+
+		_, _, err = GetPath(query, map[string]any{"id": 1.0}, GetOptions{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected '}' to close field selection")
+	})
+
+	t.Run("field selection error at start has safe pretty offset", func(t *testing.T) {
+		_, _, err := GetPath(`{id}`, []any{1.0, 2.0}, GetOptions{})
+		require.Error(t, err)
+		require.Equal(t, uint(0), err.Offset())
+
+		var pretty string
+		require.NotPanics(t, func() {
+			pretty = err.Pretty()
+		})
+		assert.Contains(t, pretty, "{id}\n^")
+	})
+
+	t.Run("invalid filter remains invalid across reuse", func(t *testing.T) {
+		query := `items[1/0].id`
+
+		inputA := map[string]any{
+			"items": []any{map[string]any{"id": 1.0}},
+		}
+		_, _, err := GetPath(query, inputA, GetOptions{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot divide by zero")
+
+		inputB := map[string]any{
+			"items": []any{map[string]any{"id": 2.0}},
+		}
+		_, _, err = GetPath(query, inputB, GetOptions{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot divide by zero")
+	})
+}
+
+func TestBoundedConcurrentCacheEvictsOldest(t *testing.T) {
+	cache := newBoundedConcurrentCache(2)
+	require.Len(t, cache.order, 2)
+	require.Equal(t, 2, cap(cache.order))
+
+	actual, loaded := cache.LoadOrStore("a", 1)
+	require.False(t, loaded)
+	assert.Equal(t, 1, actual)
+
+	actual, loaded = cache.LoadOrStore("b", 2)
+	require.False(t, loaded)
+	assert.Equal(t, 2, actual)
+
+	actual, loaded = cache.LoadOrStore("a", 10)
+	require.True(t, loaded)
+	assert.Equal(t, 1, actual)
+
+	actual, loaded = cache.LoadOrStore("c", 3)
+	require.False(t, loaded)
+	assert.Equal(t, 3, actual)
+
+	_, ok := cache.Load("a")
+	assert.False(t, ok)
+
+	actual, ok = cache.Load("b")
+	require.True(t, ok)
+	assert.Equal(t, 2, actual)
+
+	actual, ok = cache.Load("c")
+	require.True(t, ok)
+	assert.Equal(t, 3, actual)
+
+	actual, loaded = cache.LoadOrStore("d", 4)
+	require.False(t, loaded)
+	assert.Equal(t, 4, actual)
+	assert.Len(t, cache.entries, 2)
+	assert.Len(t, cache.order, 2)
+	assert.Equal(t, 2, cap(cache.order))
+
+	_, ok = cache.Load("b")
+	assert.False(t, ok)
+}
+
+func TestCompiledFieldParseErrorKeepsOnlyQuerySource(t *testing.T) {
+	query, err := compilePath(`{id`)
+	require.NoError(t, err)
+	require.Len(t, query.segments, 1)
+	require.Len(t, query.segments[0].ops, 1)
+
+	op, ok := query.segments[0].ops[0].(compiledFieldsOp)
+	require.True(t, ok)
+	require.Error(t, op.parseErr)
+
+	exprErr, ok := op.parseErr.(*exprErr)
+	require.True(t, ok)
+	assert.Equal(t, `{id`, *exprErr.source)
+	assert.Contains(t, exprErr.Pretty(), "{id")
+}
+
+func TestGetPathWildcardOrderingIsStable(t *testing.T) {
+	input := map[string]any{
+		"items": map[string]any{
+			"charlie": map[string]any{"id": 3.0},
+			"alpha":   map[string]any{"id": 1.0},
+			"bravo":   map[string]any{"id": 2.0},
+		},
+	}
+
+	got, found, err := GetPath(`items.*.id`, input, GetOptions{})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, []any{1.0, 2.0, 3.0}, got)
+}
+
+func TestGetPathRecursiveDescentMixedInput(t *testing.T) {
+	input := map[string]any{
+		"id": "root",
+		"items": []any{
+			map[string]any{
+				"id": "item-1",
+				"child": map[string]any{
+					"id": "child-1",
+				},
+			},
+			map[string]any{
+				"child": map[string]any{
+					"id": "child-2",
+				},
+			},
+		},
+		"meta": map[string]any{
+			"nested": []any{
+				map[string]any{"id": "nested-1"},
+				map[string]any{"other": true},
+				map[string]any{"id": nil},
+			},
+		},
+	}
+
+	got, found, err := GetPath(`..id`, input, GetOptions{})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, []any{"root", "child-1", "item-1", "child-2", "nested-1", nil}, got)
+}
+
+func makeRestishQueryFixture(shift int) (map[string]any, []any) {
+	items := make([]any, 0, 12)
+	expected := make([]any, 0, 4)
+
+	for i := 0; i < 12; i++ {
+		statuses := []string{"pending", "ready", "retrying"}
+		status := statuses[(i+shift)%len(statuses)]
+
+		item := map[string]any{
+			"id":     fmt.Sprintf("req-%03d", i+shift*100),
+			"status": status,
+			"title":  fmt.Sprintf("Request %03d", i+shift*100),
+			"_links": map[string]any{
+				"self": map[string]any{
+					"href": fmt.Sprintf("https://api.example.test/requests/%03d", i+shift*100),
+				},
+			},
+			"content": map[string]any{
+				"author": map[string]any{
+					"login": fmt.Sprintf("user-%02d", (i+shift)%5),
+				},
+				"tags": []any{
+					fmt.Sprintf("team-%d", (i+shift)%4),
+					fmt.Sprintf("tier-%d", ((i+shift)%3)+1),
+				},
+				"stats": map[string]any{
+					"response_ms": float64(100 + ((i + shift) % 10)),
+				},
+			},
+		}
+
+		items = append(items, item)
+		if status == "ready" {
+			expected = append(expected, map[string]any{
+				"id":      item["id"],
+				"title":   item["title"],
+				"self":    item["_links"].(map[string]any)["self"].(map[string]any)["href"],
+				"author":  item["content"].(map[string]any)["author"].(map[string]any)["login"],
+				"tags":    item["content"].(map[string]any)["tags"],
+				"latency": item["content"].(map[string]any)["stats"].(map[string]any)["response_ms"],
+			})
+		}
+	}
+
+	return map[string]any{"items": items}, expected
+}
+
+func makeAWSVolumeQueryFixture(shift int) (map[string]any, []any) {
+	volumes := make([]any, 0, 12)
+	expected := make([]any, 0, 4)
+
+	for i := 0; i < 12; i++ {
+		volumeTypes := []string{"gp3", "io2", "gp2"}
+		volumeType := volumeTypes[(i+shift)%len(volumeTypes)]
+
+		attachments := []any{}
+		if (i+shift)%3 != 0 {
+			attachments = append(attachments, map[string]any{
+				"InstanceId": fmt.Sprintf("i-%08d", 30000000+i+shift*100),
+				"State":      "attached",
+			})
+		}
+
+		tags := []any{
+			map[string]any{"Key": "Name", "Value": fmt.Sprintf("volume-%03d", i+shift*100)},
+			map[string]any{"Key": "Env", "Value": []string{"prod", "stage", "dev"}[(i+shift)%3]},
+		}
+
+		volume := map[string]any{
+			"VolumeId":         fmt.Sprintf("vol-%08d", 70000000+i+shift*100),
+			"VolumeType":       volumeType,
+			"AvailabilityZone": fmt.Sprintf("us-west-2%c", 'a'+rune((i+shift)%3)),
+			"Attachments":      attachments,
+			"Tags":             tags,
+		}
+
+		volumes = append(volumes, volume)
+		if volumeType == "gp3" {
+			attachedInstance := any(nil)
+			if len(attachments) > 0 {
+				attachedInstance = attachments[0].(map[string]any)["InstanceId"]
+			}
+
+			expected = append(expected, map[string]any{
+				"id":               volume["VolumeId"],
+				"az":               volume["AvailabilityZone"],
+				"attachedInstance": attachedInstance,
+				"name":             tags[0].(map[string]any)["Value"],
+			})
+		}
+	}
+
+	return map[string]any{"Volumes": volumes}, expected
 }
 
 var getBenchInput = map[string]any{
