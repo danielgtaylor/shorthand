@@ -401,10 +401,19 @@ The query language supports:
 - Array indexing & slicing `foo.items[1:2].name`
   - Including negative indexes `foo.items[-1].name`
 - Array filtering via [mexpr](https://github.com/danielgtaylor/mexpr) `foo.items[name.lower startsWith d]`
+- Array construction `[foo.id, foo.name]`
 - Object property selection `foo.{created, names: items.name}`
 - Recursive search `foo..name`
 - Stopping processing with a pipe `|`
 - Flattening nested arrays `[]`
+
+Square brackets are context-sensitive in queries. At the beginning of a query or
+object field value, a `[` expression constructs an array only when it contains a
+top-level comma, so `[id, name]` returns a two-item array with those query
+results. Single-element and empty array construction are not supported. A `[`
+after an existing path indexes, slices, or filters that value, as in `items[0]`,
+`items[:2]`, or `items[status == active]`. An empty bracket expression, `[]`,
+keeps its existing meaning and flattens nested arrays one level.
 
 The query syntax is recursive and looks like this:
 
@@ -489,6 +498,22 @@ $ j <data.json -q 'users[friends contains b].{id, age}'
     "id": 2
   }
 ]
+
+# Construct a shell-friendly array of selected values
+$ j <data.json -q '[users[0].id, users[0].friends[0]]'
+[
+  1,
+  "a"
+]
+
+# Array construction also works inside object selection
+$ j <data.json -q '{vars: [users[0].id, users[0].friends[0]]}'
+{
+  "vars": [
+    1,
+    "a"
+  ]
+}
 ```
 
 ## Library Usage

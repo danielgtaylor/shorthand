@@ -42,14 +42,16 @@ func GetPath(path string, input any, options GetOptions) (any, bool, Error) {
 	result := input
 	var ok bool
 	var err Error
+	firstSegment := true
 	for d.pos < uint(len(d.expression)) {
-		result, ok, err = d.getPath(result)
+		result, ok, err = d.getPath(result, firstSegment)
 		if err != nil {
 			return result, ok, err
 		}
 		if d.peek() == '|' {
 			d.next()
 		}
+		firstSegment = false
 	}
 	return result, ok, nil
 }
@@ -153,6 +155,149 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 	return false, 0, 0, value, nil
 }
 
+func (d *Document) rebaseError(base uint, err Error) Error {
+	if err == nil {
+		return nil
+	}
+	return NewError(&d.expression, base+err.Offset(), err.Length(), err.Error())
+}
+
+func (d *Document) skipQuotedRaw() Error {
+	start := d.pos - d.lastWidth
+	for {
+		r := d.next()
+		if r == '\\' {
+			if d.peek() != -1 {
+				d.next()
+			}
+			continue
+		}
+		if r == -1 {
+			return NewError(&d.expression, start, d.pos-start, "Expected quote but found EOF")
+		}
+		if r == '"' {
+			return nil
+		}
+	}
+}
+
+func (d *Document) parseArrayLiteralElement() (string, rune, uint, Error) {
+	start := d.pos
+	open := 0
+
+	for {
+		r := d.next()
+		switch r {
+		case -1:
+			return "", -1, start, NewError(&d.expression, start, d.pos-start, "expected ']' after array literal")
+		case '\\':
+			if d.peek() != -1 {
+				d.next()
+			}
+		case '"':
+			if err := d.skipQuotedRaw(); err != nil {
+				return "", -1, start, err
+			}
+		case '[', '{', '(':
+			open++
+		case ']':
+			if open == 0 {
+				end := d.pos - d.lastWidth
+				return strings.TrimSpace(d.expression[start:end]), r, start, nil
+			}
+			open--
+		case '}', ')':
+			if open == 0 {
+				return "", -1, d.pos - d.lastWidth, NewError(&d.expression, d.pos-d.lastWidth, 1, "expected ']' after array literal")
+			}
+			open--
+		case ',':
+			if open == 0 {
+				end := d.pos - d.lastWidth
+				return strings.TrimSpace(d.expression[start:end]), r, start, nil
+			}
+		}
+	}
+}
+
+func (d *Document) bracketHasTopLevelComma() (bool, Error) {
+	savedPos := d.pos
+	savedLastWidth := d.lastWidth
+	defer func() {
+		d.pos = savedPos
+		d.lastWidth = savedLastWidth
+	}()
+
+	open := 0
+	for {
+		r := d.next()
+		switch r {
+		case -1:
+			return false, nil
+		case '\\':
+			if d.peek() != -1 {
+				d.next()
+			}
+		case '"':
+			if err := d.skipQuotedRaw(); err != nil {
+				return false, err
+			}
+		case '[', '{', '(':
+			open++
+		case ']':
+			if open == 0 {
+				return false, nil
+			}
+			open--
+		case '}', ')':
+			if open > 0 {
+				open--
+			}
+		case ',':
+			if open == 0 {
+				return true, nil
+			}
+		}
+	}
+}
+
+func (d *Document) getArrayLiteral(input any) ([]any, Error) {
+	if d.options.DebugLogger != nil {
+		d.options.DebugLogger("Getting array literal")
+	}
+
+	d.skipWhitespace()
+	result := []any{}
+	for {
+		d.skipWhitespace()
+		if d.peek() == ']' {
+			return nil, d.error(1, "expected array literal element")
+		}
+
+		expr, delimiter, exprStart, err := d.parseArrayLiteralElement()
+		if err != nil {
+			return nil, err
+		}
+		if expr == "" {
+			return nil, NewError(&d.expression, exprStart, 1, "expected array literal element")
+		}
+
+		value, _, err := GetPath(expr, input, GetOptions{
+			DebugLogger: d.options.DebugLogger,
+		})
+		if err != nil {
+			return nil, d.rebaseError(exprStart, err)
+		}
+		result = append(result, value)
+
+		if delimiter == ']' {
+			break
+		}
+	}
+
+	return result, nil
+}
+
 func (d *Document) getFiltered(expr string, input any) (any, Error) {
 	ast, err := mexpr.Parse(expr, nil)
 	if err != nil {
@@ -176,7 +321,7 @@ func (d *Document) getFiltered(expr string, input any) (any, Error) {
 
 				var err Error
 				d.pos = savedPos
-				out, _, err = d.getPath(item)
+				out, _, err = d.getPath(item, false)
 				if err != nil {
 					return nil, err
 				}
@@ -421,9 +566,10 @@ func (d *Document) flatten(input any) any {
 	return nil
 }
 
-func (d *Document) getPath(input any) (any, bool, Error) {
+func (d *Document) getPath(input any, allowArrayLiteral bool) (any, bool, Error) {
 	var err Error
 	found := false
+	consumed := false
 
 outer:
 	for {
@@ -440,13 +586,37 @@ outer:
 				found = true
 				continue
 			}
+			if allowArrayLiteral && !consumed {
+				isArrayLiteral, err := d.bracketHasTopLevelComma()
+				if err != nil {
+					return nil, false, err
+				}
+				if !isArrayLiteral {
+					input, err = d.getPathIndex(input)
+					if err != nil {
+						return nil, false, err
+					}
+					found = true
+					consumed = true
+					continue
+				}
+				input, err = d.getArrayLiteral(input)
+				if err != nil {
+					return nil, false, err
+				}
+				found = true
+				consumed = true
+				continue
+			}
 			input, err = d.getPathIndex(input)
 			if err != nil {
 				return nil, false, err
 			}
 			found = true
+			consumed = true
 		case '.':
 			d.next()
+			consumed = true
 			if d.peek() == '.' {
 				// Special case: recursive descent property query
 				// i.e. find this key recursively through everything
@@ -468,12 +638,12 @@ outer:
 				if len(s) == 0 {
 					// We will get `nil`, but still need to move the read head forwards to
 					// prevent an infinite loop here.
-					d.getPath(nil)
+					d.getPath(nil, false)
 				}
 
 				for i := range s {
 					d.pos = savedPos
-					result, resultFound, err = d.getPath(s[i])
+					result, resultFound, err = d.getPath(s[i], false)
 					if err != nil {
 						return nil, false, err
 					}
@@ -500,6 +670,7 @@ outer:
 				return nil, false, err
 			}
 			found = true
+			consumed = true
 			continue
 		case ',', ']', '}':
 			d.next()
@@ -508,6 +679,7 @@ outer:
 			if err != nil {
 				return nil, false, err
 			}
+			consumed = true
 		}
 	}
 
@@ -524,6 +696,7 @@ func (d *Document) getFields(input any) (any, Error) {
 	open := 1
 	var r rune
 	d.skipWhitespace()
+	pathStart := d.pos
 	for {
 		r = d.next()
 		if r == '"' {
@@ -542,13 +715,14 @@ func (d *Document) getFields(input any) (any, Error) {
 		}
 		if r == '[' {
 			d.buf.WriteRune(r)
-			d.parseUntilNoReset(1, '|')
+			d.parseUntilNoReset(1)
 			continue
 		}
 		if r == ':' && open <= 1 {
 			key = d.buf.String()
 			d.buf.Reset()
 			d.skipWhitespace()
+			pathStart = d.pos
 			continue
 		}
 		if r == '{' {
@@ -568,7 +742,7 @@ func (d *Document) getFields(input any) (any, Error) {
 				DebugLogger: d.options.DebugLogger,
 			})
 			if err != nil {
-				return nil, err
+				return nil, d.rebaseError(pathStart, err)
 			}
 			result[key] = value
 			if r == '}' {
@@ -577,6 +751,7 @@ func (d *Document) getFields(input any) (any, Error) {
 			key = ""
 			d.buf.Reset()
 			d.skipWhitespace()
+			pathStart = d.pos
 			continue
 		}
 		d.buf.WriteRune(r)
