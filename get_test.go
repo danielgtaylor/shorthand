@@ -225,6 +225,72 @@ var getExamples = []struct {
 		Go:    "a",
 	},
 	{
+		Name:  "Root array index still works",
+		Input: `["a", "b", "c"]`,
+		Query: `[0]`,
+		Go:    "a",
+	},
+	{
+		Name:  "Root array slice still works",
+		Input: `["a", "b", "c"]`,
+		Query: `[:1]`,
+		Go:    []any{"a", "b"},
+	},
+	{
+		Name:  "Root array filter still works",
+		Input: `["a", "b", "c"]`,
+		Query: `[@ startsWith a]`,
+		Go:    []any{"a"},
+	},
+	{
+		Name:  "Array literal multiple elements",
+		Input: `{"body": {"val1": "one", "val2": "two"}}`,
+		Query: `[body.val1, body.val2]`,
+		Go:    []any{"one", "two"},
+	},
+	{
+		Name:  "Array literal in field expression",
+		Input: `{"body": {"val1": "one", "val2": "two"}}`,
+		Query: `{foo: [body.val1, body.val2]}`,
+		Go:    map[string]any{"foo": []any{"one", "two"}},
+	},
+	{
+		Name:  "Array literal in field expression with piped element",
+		Input: `{"items": ["a", "b"], "other": "z"}`,
+		Query: `{foo: [items|[0], other]}`,
+		Go:    map[string]any{"foo": []any{"a", "z"}},
+	},
+	{
+		Name:  "Array literal with nested field expression",
+		Input: `{"body": {"val1": "one", "val2": "two"}}`,
+		Query: `[{foo: body.val1}, body.val2]`,
+		Go:    []any{map[string]any{"foo": "one"}, "two"},
+	},
+	{
+		Name:  "Array literal with nested multi-field expression",
+		Input: `{"body": {"val1": "one", "val2": "two", "val3": "three"}}`,
+		Query: `[{foo: body.val1, bar: body.val2}, body.val3]`,
+		Go:    []any{map[string]any{"foo": "one", "bar": "two"}, "three"},
+	},
+	{
+		Name:  "Array literal with quoted comma in piped element",
+		Input: `{"items": [{"id": "a,b", "name": "hit"}], "other": "z"}`,
+		Query: `[items[id == "a,b"].name|[0], other]`,
+		Go:    []any{"hit", "z"},
+	},
+	{
+		Name:  "Array literal missing element preserved",
+		Input: `{"body": {"val1": "one", "val2": "two"}}`,
+		Query: `[body.val1, body.missing, body.val2]`,
+		Go:    []any{"one", nil, "two"},
+	},
+	{
+		Name:  "Root empty brackets flatten",
+		Input: `[[1, 2], 3, [[4]]]`,
+		Query: `[]`,
+		Go:    []any{1.0, 2.0, 3.0, []any{4.0}},
+	},
+	{
 		Name:  "Array filtering escape",
 		Input: `{"items": ["a", "b", "c"]}`,
 		Query: `items[@ startsWith \u0061]`,
@@ -341,6 +407,30 @@ var getExamples = []struct {
 		Query: `{id`,
 		Error: "expected '}' to close field selection",
 	},
+	{
+		Name:  "Array literal unclosed",
+		Input: `{}`,
+		Query: `[`,
+		Error: "expected ']' after index or filter",
+	},
+	{
+		Name:  "Array literal unclosed after comma",
+		Input: `{}`,
+		Query: `[body.a,`,
+		Error: "expected ']' after array literal",
+	},
+	{
+		Name:  "Array literal trailing comma",
+		Input: `{}`,
+		Query: `[body.a,]`,
+		Error: "expected array literal element",
+	},
+	{
+		Name:  "Array literal nested in field unclosed",
+		Input: `{}`,
+		Query: `{foo: [body.a}`,
+		Error: "expected ']' after index or filter",
+	},
 }
 
 func TestGet(t *testing.T) {
@@ -445,6 +535,34 @@ func TestGetPathAdditionalEdgeCases(t *testing.T) {
 			input: map[string]any{"field": "hello"},
 			query: `field|[]`,
 			want:  nil,
+			found: true,
+		},
+		{
+			name:  "Single bracket expression is not array literal",
+			input: map[string]any{"body": map[string]any{"subject": "docs"}},
+			query: `[body.subject]`,
+			want:  nil,
+			found: true,
+		},
+		{
+			name:  "Single bracket expression in field is not array literal",
+			input: map[string]any{"body": map[string]any{"subject": "docs"}},
+			query: `{foo: [body.subject]}`,
+			want:  map[string]any{"foo": nil},
+			found: true,
+		},
+		{
+			name: "Root filter function comma is not array literal",
+			input: []any{
+				map[string]any{
+					"id": 1,
+					"keep": func(a, b string) bool {
+						return a == "a" && b == "b"
+					},
+				},
+			},
+			query: `[keep("a", "b")].id`,
+			want:  []any{1},
 			found: true,
 		},
 		{

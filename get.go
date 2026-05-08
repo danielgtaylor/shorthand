@@ -115,6 +115,10 @@ type compiledFilterOp struct {
 	ast *mexpr.Node
 }
 
+type compiledArrayLiteralOp struct {
+	elements []*compiledQuery
+}
+
 type compiledField struct {
 	key   string
 	query *compiledQuery
@@ -186,7 +190,7 @@ func compilePath(path string) (*compiledQuery, Error) {
 	query := &compiledQuery{expression: path}
 
 	for d.pos < uint(len(d.expression)) {
-		segment, err := d.compileSegment()
+		segment, err := d.compileSegment(len(query.segments) == 0)
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +206,7 @@ func compilePath(path string) (*compiledQuery, Error) {
 // compileSegment compiles one pipe-delimited segment of a query into a flat
 // sequence of executable ops. Filters and field selections recursively compile
 // nested query fragments.
-func (d *Document) compileSegment() (compiledSegment, Error) {
+func (d *Document) compileSegment(allowArrayLiteral bool) (compiledSegment, Error) {
 	ops := make([]compiledOp, 0, 8)
 
 outer:
@@ -216,6 +220,20 @@ outer:
 				d.next()
 				ops = append(ops, compiledFlattenOp{})
 				continue
+			}
+			if allowArrayLiteral && len(ops) == 0 {
+				isArrayLiteral, err := d.bracketHasTopLevelComma()
+				if err != nil {
+					return compiledSegment{}, err
+				}
+				if isArrayLiteral {
+					elements, err := d.compileArrayLiteral()
+					if err != nil {
+						return compiledSegment{}, err
+					}
+					ops = append(ops, compiledArrayLiteralOp{elements: elements})
+					continue
+				}
 			}
 
 			isSlice, startIndex, stopIndex, expr, err := d.parsePathIndex()
@@ -421,6 +439,21 @@ func (q *compiledQuery) execSegment(segment *compiledSegment, input any, start i
 			}
 
 			return compiledExecResult{value: out, found: true, consumed: true}, nil
+		case compiledArrayLiteralOp:
+			if options.DebugLogger != nil {
+				options.DebugLogger("Getting array literal")
+			}
+			out := make([]any, 0, len(op.elements))
+			for _, element := range op.elements {
+				value, _, err := element.Exec(result, options)
+				if err != nil {
+					return compiledExecResult{}, err
+				}
+				out = append(out, value)
+			}
+			result = out
+			found = true
+			consumed = true
 		case compiledFieldsOp:
 			if !isMap(result) {
 				return compiledExecResult{}, NewError(&q.expression, op.offset, 1, "field selection requires a map, but found %v", result)
@@ -697,6 +730,143 @@ func (d *Document) parsePathIndex() (bool, int, int, string, Error) {
 	return false, 0, 0, value, nil
 }
 
+func (d *Document) rebaseError(base uint, err Error) Error {
+	if err == nil {
+		return nil
+	}
+	return NewError(&d.expression, base+err.Offset(), err.Length(), err.Error())
+}
+
+func (d *Document) skipQuotedRaw() Error {
+	start := d.pos - d.lastWidth
+	for {
+		r := d.next()
+		if r == '\\' {
+			if d.peek() != -1 {
+				d.next()
+			}
+			continue
+		}
+		if r == -1 {
+			return NewError(&d.expression, start, d.pos-start, "Expected quote but found EOF")
+		}
+		if r == '"' {
+			return nil
+		}
+	}
+}
+
+func (d *Document) parseArrayLiteralElement() (string, rune, uint, Error) {
+	start := d.pos
+	open := 0
+
+	for {
+		r := d.next()
+		switch r {
+		case -1:
+			return "", -1, start, NewError(&d.expression, start, d.pos-start, "expected ']' after array literal")
+		case '\\':
+			if d.peek() != -1 {
+				d.next()
+			}
+		case '"':
+			if err := d.skipQuotedRaw(); err != nil {
+				return "", -1, start, err
+			}
+		case '[', '{', '(':
+			open++
+		case ']':
+			if open == 0 {
+				end := d.pos - d.lastWidth
+				return strings.TrimSpace(d.expression[start:end]), r, start, nil
+			}
+			open--
+		case '}', ')':
+			if open == 0 {
+				return "", -1, d.pos - d.lastWidth, NewError(&d.expression, d.pos-d.lastWidth, 1, "expected ']' after array literal")
+			}
+			open--
+		case ',':
+			if open == 0 {
+				end := d.pos - d.lastWidth
+				return strings.TrimSpace(d.expression[start:end]), r, start, nil
+			}
+		}
+	}
+}
+
+func (d *Document) bracketHasTopLevelComma() (bool, Error) {
+	savedPos := d.pos
+	savedLastWidth := d.lastWidth
+	defer func() {
+		d.pos = savedPos
+		d.lastWidth = savedLastWidth
+	}()
+
+	open := 0
+	for {
+		r := d.next()
+		switch r {
+		case -1:
+			return false, nil
+		case '\\':
+			if d.peek() != -1 {
+				d.next()
+			}
+		case '"':
+			if err := d.skipQuotedRaw(); err != nil {
+				return false, err
+			}
+		case '[', '{', '(':
+			open++
+		case ']':
+			if open == 0 {
+				return false, nil
+			}
+			open--
+		case '}', ')':
+			if open > 0 {
+				open--
+			}
+		case ',':
+			if open == 0 {
+				return true, nil
+			}
+		}
+	}
+}
+
+func (d *Document) compileArrayLiteral() ([]*compiledQuery, Error) {
+	d.skipWhitespace()
+	elements := []*compiledQuery{}
+	for {
+		d.skipWhitespace()
+		if d.peek() == ']' {
+			return nil, d.error(1, "expected array literal element")
+		}
+
+		expr, delimiter, exprStart, err := d.parseArrayLiteralElement()
+		if err != nil {
+			return nil, err
+		}
+		if expr == "" {
+			return nil, NewError(&d.expression, exprStart, 1, "expected array literal element")
+		}
+
+		query, err := getCompiledPath(expr)
+		if err != nil {
+			return nil, d.rebaseError(exprStart, err)
+		}
+		elements = append(elements, query)
+
+		if delimiter == ']' {
+			break
+		}
+	}
+
+	return elements, nil
+}
+
 func stringRuneSlice(s string, startIndex int, stopIndex int) string {
 	byteStart := 0
 	byteEnd := len(s)
@@ -769,7 +939,7 @@ func (d *Document) parseFieldSpecs() ([]fieldSpec, uint, Error) {
 		}
 		if r == '[' {
 			d.buf.WriteRune(r)
-			if _, _, err := d.parseUntilNoReset(1, '|'); err != nil {
+			if _, _, err := d.parseUntilNoReset(1); err != nil {
 				return nil, 0, err
 			}
 			continue
